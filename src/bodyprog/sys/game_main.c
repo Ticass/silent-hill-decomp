@@ -484,8 +484,16 @@ static void Pc_TpsCamera_Apply(void)
          * head-local +Z column is used as face-forward: for YAW this is exact
          * under any rest axis (a Y-rotation shifts every horizontal vector's yaw
          * equally, and the constant axis offset is removed by the reference). */
-        s32 viewYaw   = g_TpsCamYaw;
+        s32 rearOfs;
+        s32 viewYaw;
         s32 viewPitch = g_TpsCamPitch;
+        /* Rear Look (held bind): swing the orbit 180 so the camera sits in front of
+         * Harry and looks back past him. TPS/OTS only; FPS forces 0 (byte-identical). */
+        {
+            extern int g_PcRearLookActive;
+            rearOfs = (g_PcRearLookActive && !g_PcFpsCam) ? Q12_ANGLE(180.0f) : 0;
+        }
+        viewYaw = g_TpsCamYaw + rearOfs;
         if (g_PcFpsCam && g_PcConfig.immersiveFpsHeadTracking)
         {
             const MATRIX* hm  = &g_SysWork.playerBoneCoords[HarryBone_Head].workm;
@@ -789,8 +797,8 @@ static void Pc_TpsCamera_Apply(void)
             #define OTS_OFFSET_AIM Q12(0.9f)
             s32 restOff   = (g_ControlStyle == ControlStyle_Ots) ? OTS_OFFSET : 0;
             s32 targetOff = (isAiming ? OTS_OFFSET_AIM : restOff) * g_OtsSide;
-            s32 rX = Math_Cos(g_TpsCamYaw);   /* horizontal right vector = (cos yaw, -sin yaw) */
-            s32 rZ = -Math_Sin(g_TpsCamYaw);
+            s32 rX = Math_Cos(g_TpsCamYaw + rearOfs);   /* horizontal right vector = (cos yaw, -sin yaw); +rearOfs flips the shoulder with Rear Look */
+            s32 rZ = -Math_Sin(g_TpsCamYaw + rearOfs);
             s32 ox, oz;
 
             s_otsOff += (targetOff - s_otsOff) >> 3;
@@ -1904,6 +1912,29 @@ void MainLoop(void) // 0x80032EE0
             Pc_ControlStyleUpdate();
         }
 
+        /* Bound PC actions: Cycle Weapons + Quick Heal + Quick Turn request (reload
+         * is pulled by the combat FSM). Keyboard + controller, edge-detected. */
+        {
+            extern void Pc_ExtraActionsUpdate(void);
+            Pc_ExtraActionsUpdate();
+        }
+
+        /* Rear Look (held): set g_PcRearLookActive for the TPS/OTS camera + head. */
+        {
+            extern void Pc_RearLookUpdate(void);
+            Pc_RearLookUpdate();
+        }
+
+        /* "Disable D-pad for movement" applies ONLY during gameplay, so the D-pad
+         * still navigates menus / inventory / the map. Re-evaluated every frame. */
+        {
+            extern int g_cfg_disableDpadMovement;
+            g_cfg_disableDpadMovement =
+                (g_PcConfig.disableDpadMovement &&
+                 g_GameWork.gameState == GameState_InGame &&
+                 g_SysWork.sysState   == SysState_Gameplay) ? 1 : 0;
+        }
+
         /* Mouse cursor: drive free-cursor puzzles + the main menu from the mouse.
          * Runs after the controller is built and before the state update reads
          * it, so puzzle-cursor injection lands this frame. */
@@ -2041,6 +2072,14 @@ void MainLoop(void) // 0x80032EE0
 #define ML_TRACE(tag) ((void)0)
         ML_TRACE("Screen_FadeUpdate");
         Screen_FadeUpdate();
+#ifdef SH_PC_PORT
+        /* Quick Heal green pulse — full-screen additive tile into OT2, same window as
+         * the fade. Self-gated on its timer (no-op when not healing). */
+        {
+            extern void Pc_HealFlashUpdate(void);
+            Pc_HealFlashUpdate();
+        }
+#endif
         ML_TRACE("MemCard_Update");
         MemCard_Update();
         ML_TRACE("Sd_TaskPoolExecute");

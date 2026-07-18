@@ -11919,6 +11919,22 @@ bool sharedFunc_800D5F00_0_s01(s_SubCharacter* const airScreamer)
 
     groundHeight = Collision_GroundHeightGet(posX, posZ);
 
+#ifdef SH_PC_PORT
+    /* High-FPS death fix (relocated to the top so the velocity gates below can't
+     * block it). This settle check's ONLY caller is the kill gate in
+     * Ai_AirScreamer_Control_2, consulted only when health<=0. A downed screamer
+     * has its move/rotation targets re-seeded every frame, so the gates below keep
+     * returning false and the kill (anim==Stun-active && this) never fires — it
+     * hangs downed-but-alive (radio on, no blood, unshootable) until a menu pause
+     * lets the residuals settle to exactly zero on one frame. Treat an already-
+     * downed screamer as settled and let it die where it rests. Living-AS movement
+     * (health>0) is byte-identical (still falls through to the gates below). */
+    if (airScreamer->health <= Q12(0.0f))
+    {
+        return true;
+    }
+#endif
+
     if (airScreamer->moveSpeed != Q12(0.0f))
     {
         return false;

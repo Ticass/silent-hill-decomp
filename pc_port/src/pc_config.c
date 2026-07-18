@@ -60,6 +60,9 @@ s_PcConfig g_PcConfig = {
     .altButtonSprint     = 0, /* alt cams sprint from the run control only (off = full stick push also sprints) */
     .immersiveFpsHeadTracking = 0, /* FPS view follows head-bone rotation (experiment, off by default) */
     .control2d               = 0, /* 2D screen-relative movement (experiment, off by default) */
+    .control2dSnap           = 0, /* 2D control turns into the direction (0), doesn't snap */
+    .disableDpadMovement     = 0, /* D-pad still drives movement (off = byte-identical) */
+    .menuFilter              = 0, /* menus unfiltered (off = byte-identical) */
     .adsr                = 1,    /* SPU ADSR envelopes on (BGM instrument fades) */
     .audioOutput         = 0,    /* auto: OpenAL detects the system speaker layout */
     .fpsFov              = 71.1f, /* first-person FOV; 71.1 = the game's own projection (H = gsScreenHeight = 224), so the default changes nothing */
@@ -81,6 +84,13 @@ s_PcConfig g_PcConfig = {
         .padL2 = "lefttrigger", .padR2 = "righttrigger",
         .padL3 = "leftstick", .padR3 = "rightstick",
         .padStart = "start", .padSelect = "back",
+        .keyChangeCam = "F9", .padChangeCam = "rightstick",
+        .keyReload = "R", .padReload = "NONE",
+        .keyCycleWeapons = "NONE", .padCycleWeapons = "NONE",
+        .keyQuickHeal = "NONE", .padQuickHeal = "NONE",
+        .keyReload2 = "NONE",
+        .keyQuickTurn = "NONE", .padQuickTurn = "NONE",
+        .keyRearLook = "NONE", .padRearLook = "NONE",
     },
     /* === ALTCAM scheme: any alternate/modern camera (TPS/OTS). WASD move,
      * A/D strafe, mouse aim(RMB)/fire(LMB); controller LT aim / RT fire, A = use.
@@ -97,9 +107,17 @@ s_PcConfig g_PcConfig = {
         .padL3 = "leftstick", .padR3 = "rightstick",
         .padStart = "start", .padSelect = "back",
         .padCross2 = "a",
+        /* Action binds default to the same as classic until the player rebinds
+         * the altcam scheme (Change Camera stays F9/rightstick, reload keyboard R). */
+        .keyChangeCam = "F9", .padChangeCam = "rightstick",
+        .keyReload = "R", .padReload = "NONE",
+        .keyCycleWeapons = "NONE", .padCycleWeapons = "NONE",
+        .keyQuickHeal = "NONE", .padQuickHeal = "NONE",
+        .keyReload2 = "NONE",
+        .keyQuickTurn = "NONE", .padQuickTurn = "NONE",
+        .keyRearLook = "NONE", .padRearLook = "NONE",
     },
     .keyQuickSave = "F6", .keyQuickLoad = "F8",
-    .keyChangeCam = "F9", .padChangeCam = "rightstick",
     .keySwapShoulder = "Mouse3",
     .keyConsole = "`",
     .keyGfxCycle = "\\",
@@ -180,14 +198,26 @@ static const struct { const char* key; size_t off; } s_SchemeBinds[] = {
     { "pad_r3_2",       offsetof(ControlScheme, padR32)       },
     { "pad_start_2",    offsetof(ControlScheme, padStart2)    },
     { "pad_select_2",   offsetof(ControlScheme, padSelect2)   },
+    /* PC-only actions — per-scheme (base key = classic, "_altcam" = altcam). */
+    { "key_change_cam",    offsetof(ControlScheme, keyChangeCam)    },
+    { "pad_change_cam",    offsetof(ControlScheme, padChangeCam)    },
+    { "key_reload",        offsetof(ControlScheme, keyReload)       },
+    { "pad_reload",        offsetof(ControlScheme, padReload)       },
+    { "key_cycle_weapons", offsetof(ControlScheme, keyCycleWeapons) },
+    { "pad_cycle_weapons", offsetof(ControlScheme, padCycleWeapons) },
+    { "key_quick_heal",    offsetof(ControlScheme, keyQuickHeal)    },
+    { "pad_quick_heal",    offsetof(ControlScheme, padQuickHeal)    },
+    { "key_reload_2",      offsetof(ControlScheme, keyReload2)      },
+    { "key_quick_turn",    offsetof(ControlScheme, keyQuickTurn)    },
+    { "pad_quick_turn",    offsetof(ControlScheme, padQuickTurn)    },
+    { "key_rear_look",     offsetof(ControlScheme, keyRearLook)     },
+    { "pad_rear_look",     offsetof(ControlScheme, padRearLook)     },
 };
 
 /* Global (scheme-independent) binds -> offset within s_PcConfig. */
 static const struct { const char* key; size_t off; } s_GlobalBinds[] = {
     { "key_quicksave",     offsetof(s_PcConfig, keyQuickSave)    },
     { "key_quickload",     offsetof(s_PcConfig, keyQuickLoad)    },
-    { "key_change_cam",    offsetof(s_PcConfig, keyChangeCam)    },
-    { "pad_change_cam",    offsetof(s_PcConfig, padChangeCam)    },
     { "key_swap_shoulder", offsetof(s_PcConfig, keySwapShoulder) },
     { "key_console",       offsetof(s_PcConfig, keyConsole)      },
     { "key_gfx_cycle",     offsetof(s_PcConfig, keyGfxCycle)     },
@@ -386,6 +416,10 @@ void PcConfig_Load(const char* path)
             if (v < 0) v = 0;
             if (v > 2) v = 2;
             g_PcConfig.psxDither = v;
+        }
+        else if (strcmp(key, "menu_filter") == 0)
+        {
+            g_PcConfig.menuFilter = (atoi(value) != 0);
         }
         else if (strcmp(key, "widescreen_mode") == 0)
         {
@@ -680,6 +714,14 @@ void PcConfig_Load(const char* path)
         else if (strcmp(key, "control_2d") == 0)
         {
             g_PcConfig.control2d = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "control_2d_snap") == 0)
+        {
+            g_PcConfig.control2dSnap = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "disable_dpad_movement") == 0)
+        {
+            g_PcConfig.disableDpadMovement = (atoi(value) != 0);
         }
         else if (strcmp(key, "mouse_sensitivity") == 0)
         {

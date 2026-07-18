@@ -912,6 +912,27 @@ void Player_Update(s_SubCharacter* player, s_AnmHeader* anmHdr, GsCOORDINATE2* c
             coords[HarryBone_Torso].flg = 0;
         }
 
+        /* Rear Look head turn (bonus): while the Rear Look bind is held (TPS/OTS
+         * only), ease Harry's head yaw toward an over-the-shoulder cap so he looks
+         * back at the camera; released -> eases back. Head-only, capped below a full
+         * turn so the neck doesn't clip. Byte-identical when Rear Look is never used. */
+        {
+            extern int g_PcRearLookActive;
+            extern int g_PcFpsCam;
+            static q3_12 s_rearHeadYaw = 0;
+            q3_12 target = (g_DebugThirdPersonCam && !g_PcFpsCam && g_PcRearLookActive) ? Q12_ANGLE(85.0f) : 0;
+            q3_12 step   = TIMESTEP_SCALE_30_FPS(g_DeltaTime, Q12_ANGLE(14.0f));
+            q3_12 diff   = target - s_rearHeadYaw;
+            if (diff >  step) diff =  step;
+            if (diff < -step) diff = -step;
+            s_rearHeadYaw += diff;
+            if (s_rearHeadYaw != 0)
+            {
+                func_80044F14(&coords[HarryBone_Head], Q12_ANGLE(0.0f), Q12_ANGLE(0.0f), s_rearHeadYaw);
+                coords[HarryBone_Head].flg = 0;
+            }
+        }
+
         /* Keyframe inspector (debug): when on, override the sampled pose with a
          * single absolute keyframe across Harry's whole skeleton so the exact
          * authored frame index for a pose can be found (drive K / , / . in
@@ -1467,6 +1488,29 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                  * shim path below so it can drive Harry from the camera basis. While
                  * aiming, or with 2D off, the native lower-body machine runs (vanilla
                  * tank movement + aim). */
+                /* Quick Turn (bound button): enter the native animated 180 state
+                 * before the lower-body machine runs. Only from grounded locomotion
+                 * / idle / aim-locomotion (never mid quick-turn, jump-back, stumble,
+                 * attack or reload). The state machine plays HarryAnim_QuickTurn* and
+                 * rotates at the native rate to completion. */
+                {
+                    extern int g_PcQuickTurnRequest;
+                    if (g_PcQuickTurnRequest)
+                    {
+                        int _lb = g_SysWork.playerWork.extra.lowerBodyState;
+                        g_PcQuickTurnRequest = 0;
+                        if (_lb <= PlayerLowerBodyState_RunLeft ||
+                            (_lb >= PlayerLowerBodyState_Aim && _lb <= PlayerLowerBodyState_AimRunLeft))
+                        {
+                            int _aim = (_lb < PlayerLowerBodyState_Aim) ? 0 : 20;
+                            g_SysWork.playerWork.extra.lowerBodyState =
+                                (e_PlayerLowerBodyState)(_aim + PlayerLowerBodyState_QuickTurnRight);
+                            player->model.stateStep    = 0;
+                            player->model.controlState = 0;
+                        }
+                    }
+                }
+
                 Player_LowerBodyUpdate(player, extra);
 
                 if (playerExtra.state < (u32)PlayerState_Idle)
@@ -1517,6 +1561,15 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                     int  inX   = (right ? 1 : 0) - (left ? 1 : 0);
                     int  inZ   = (fwd   ? 1 : 0) - (back ? 1 : 0);
                     int  anyInput = (inX != 0) || (inZ != 0);
+                    /* Full-360 analog: past a small deadzone the left stick drives a
+                     * continuous direction (keyboard/D-pad stay inherently 8-way).
+                     * forward = -leftY, right = +leftX (joy.c ControllerData_AnalogToDigital). */
+                    s32  a2dX   = (s32)g_Controller0->analogController.leftX - 128;
+                    s32  a2dY   = (s32)g_Controller0->analogController.leftY - 128;
+                    int  a2dUse = (a2dX * a2dX + a2dY * a2dY) >= (40 * 40);
+                    s32  inXv   = a2dUse ?  a2dX : inX;
+                    s32  inZv   = a2dUse ? -a2dY : inZ;
+                    if (a2dUse) anyInput = 1;
 
                     /* Camera "into the screen" yaw (world Q12 angle). Orbit cam =
                      * g_TpsCamYaw directly; fixed classic cam = the yaw from the
@@ -1561,14 +1614,19 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                              * forward=(sin,cos), right=(cos,-sin) of the basis yaw. */
                             s32   sfwd = Math_Sin(s_2dBasisYaw);
                             s32   cfwd = Math_Cos(s_2dBasisYaw);
-                            s32   moveX = inZ * sfwd + inX * cfwd;
-                            s32   moveZ = inZ * cfwd - inX * sfwd;
+                            s32   moveX = inZv * sfwd + inXv * cfwd;
+                            s32   moveZ = inZv * cfwd - inXv * sfwd;
                             q3_12 targetYaw = ratan2(moveX, moveZ);
-                            q3_12 diff = Math_AngleNormalizeSigned(targetYaw - player->rotation.vy);
-                            q3_12 turn2d = TIMESTEP_SCALE_30_FPS(g_DeltaTime, Q12_ANGLE(10.0f));
-                            if (diff >  turn2d) diff =  turn2d;
-                            if (diff < -turn2d) diff = -turn2d;
-                            player->rotation.vy = Q12_ANGLE_NORM_U(player->rotation.vy + diff + Q12_ANGLE(360.0f));
+                            if (g_PcConfig.control2dSnap) {
+                                /* snap: face the input direction immediately */
+                                player->rotation.vy = Q12_ANGLE_NORM_U(targetYaw + Q12_ANGLE(360.0f));
+                            } else {
+                                q3_12 diff = Math_AngleNormalizeSigned(targetYaw - player->rotation.vy);
+                                q3_12 turn2d = TIMESTEP_SCALE_30_FPS(g_DeltaTime, Q12_ANGLE(10.0f));
+                                if (diff >  turn2d) diff =  turn2d;
+                                if (diff < -turn2d) diff = -turn2d;
+                                player->rotation.vy = Q12_ANGLE_NORM_U(player->rotation.vy + diff + Q12_ANGLE(360.0f));
+                            }
                         }
                     }
 
@@ -1862,6 +1920,37 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                     }
 
                     jumpBackActive = (bool)s_jumpBackActive;
+                }
+
+                /* Quick Turn (bound button) — shim path (2D / TPS / OTS / classic-
+                 * fallback). Overrides the shim's finalized body yaw with a smooth 180
+                 * at the native rate; syncs the orbit yaw so the TPS/OTS camera follows.
+                 * Runs after every branch yaw writer, so it works in all shim modes
+                 * (classic tank uses the native animated quick-turn instead). */
+                {
+                    extern int g_PcQuickTurnRequest;
+                    static u8  s_qtActive = 0;
+                    static s32 s_qtStart  = 0;
+                    static s32 s_qtAccum  = 0;
+                    if (g_PcQuickTurnRequest)
+                    {
+                        g_PcQuickTurnRequest = 0;
+                        if (!s_qtActive && !jumpBackActive)
+                        {
+                            s_qtActive = 1;
+                            s_qtStart  = player->rotation.vy;
+                            s_qtAccum  = 0;
+                        }
+                    }
+                    if (s_qtActive)
+                    {
+                        s32 step = (s32)(g_DeltaTime * 24) >> 4;
+                        if (step < 1) step = 1;
+                        if (s_qtAccum + step >= Q12_ANGLE(180.0f)) { step = Q12_ANGLE(180.0f) - s_qtAccum; s_qtActive = 0; }
+                        s_qtAccum += step;
+                        player->rotation.vy = Q12_ANGLE_NORM_U(s_qtStart + s_qtAccum + Q12_ANGLE(360.0f));
+                        if (g_DebugThirdPersonCam) g_TpsCamYaw = player->rotation.vy;
+                    }
                 }
 
                 /* Set walk/run animation on lower body (player) and, when not

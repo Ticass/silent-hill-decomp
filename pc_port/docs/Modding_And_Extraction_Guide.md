@@ -129,6 +129,10 @@ via the same ISO9660 reader the game uses).
 - **Convert textures to PNG** — a checkbox in the extract dialog. When set, every extracted
   `.TIM` also gets a same-named `.png` beside it, decoded exactly the way the game draws it
   (`TimConverter.cs` mirrors `hires_override.c`: BGR555, `cx==0` transparent, STP ignored).
+- **Build character reference composites** — a second checkbox in the extract dialog. When set,
+  every character (`.ILM` + matching `.TIM`) also gets a `NAME_reference.png` composite beside
+  it in one pass — the correct in-game look to paint over and *Rebuild* (see §5.1). Same result
+  as clicking *Reference…* per character.
 - **TIM → PNG…** / **Bulk → PNG…** — convert individual `.TIM` files, or recursively
   convert every `.TIM` under a folder to `<name>.png` in place (with an option to delete the
   originals). This is the quick way to turn an extracted texture tree into PNGs for the
@@ -328,10 +332,11 @@ offline — no running game needed.
   samples through it. Drop the set into `gamedata/load/CHARA/`.
 
 The per-row loose PNGs are uploaded as full RGBA, so this path is **not** limited to 16
-colours per region — paint freely. (Today the edit must stay at the texture's native size;
-HD upscaling is a later addition.) Both tools need the character's `.ILM` sitting next to its
-`.TIM`, exactly how *Extract BIN…* lays them out. `compose → split` with no edits round-trips
-losslessly.
+colours per region — paint freely — and the edit can be **high-resolution**: paint the
+reference at its native size or at an upscale of it (an exact multiple like 2×/4×/8× gives the
+sharpest region edges), and *Rebuild* keeps that resolution in the output PNGs. Both tools need
+the character's `.ILM` sitting next to its `.TIM`, exactly how *Extract BIN…* lays them out.
+`compose → split` with no edits round-trips losslessly.
 
 ### 5.2 Rebuild the disc image — no size ceiling
 

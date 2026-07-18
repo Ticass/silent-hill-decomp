@@ -20,6 +20,14 @@ typedef struct {
     char padCross2[24], padCircle2[24], padTriangle2[24], padSquare2[24];
     char padL12[24], padR12[24], padL22[24], padR22[24], padL32[24], padR32[24];
     char padStart2[24], padSelect2[24];
+    /* PC-only action binds — per-scheme (classic vs altcam), no secondary/_2 slot. */
+    char keyChangeCam[24], padChangeCam[24];        /* Change Camera (cycle control style) */
+    char keyReload[24], padReload[24];              /* reload weapon */
+    char keyCycleWeapons[24], padCycleWeapons[24];  /* cycle to next owned weapon */
+    char keyQuickHeal[24], padQuickHeal[24];        /* auto-use best healing item */
+    char keyReload2[24];                            /* keyboard SECONDARY reload (no pad twin) */
+    char keyQuickTurn[24], padQuickTurn[24];        /* quick 180 turn (edge-triggered) */
+    char keyRearLook[24], padRearLook[24];          /* rear look, HELD; TPS/OTS only */
 } ControlScheme;
 
 typedef struct {
@@ -114,6 +122,9 @@ typedef struct {
     int altButtonSprint;    /* "Always use button based sprinting": 1 = walk by default, sprint ONLY while the bound run control is held — applies to alt cameras (TPS/OTS/FPS) AND 2D control under any camera; 0 = a near-full stick push also sprints (config key: altcam_button_sprint) */
     int immersiveFpsHeadTracking; /* 1 = FPS view direction follows Harry's animated head-bone rotation (idle sway/lean), mouse layered on top (config key: immersive_fps_head_tracking) */
     int control2d;          /* 1 = 2D screen-relative movement (input aligns with the camera; Harry turns to face the move direction) under ALL non-FPS camera styles (config key: control_2d) — an Experiment, off by default */
+    int control2dSnap;      /* 1 = 2D control snaps Harry instantly to the input direction instead of turning into it (config key: control_2d_snap); default 0 */
+    int disableDpadMovement; /* 1 = the controller D-pad no longer drives movement, freeing those D-pad inputs to be bound to other actions (config key: disable_dpad_movement); default 0 */
+    int menuFilter;          /* 1 = bilinear-filter menus / 2D screens, independent of the in-game texture Filtering mode; default 0 (config key: menu_filter) */
     int   adsr;             /* 1 = SPU ADSR envelopes (instrument attack/release fades in sequenced BGM); default 1 (config key: adsr) */
     int   audioOutput;      /* speaker layout: 0 = auto (OpenAL detects the system layout; alsoft.ini honored), 1 = stereo, 2 = quad, 3 = 5.1, 4 = 7.1, 5 = hrtf headphones. With rear speakers active: positional SFX pan on the full circle, wide-stereo BGM layers play from the surrounds (config key: audio_output = auto|stereo|quad|51|71|hrtf) */
     float fpsFov;           /* first-person horizontal FOV in degrees (4:3 basis), 55..110; default 71.1 = the game's OWN projection (H = gsScreenHeight = 224 on the 320-wide progressive frame), so the default is a no-op; applied ONLY during FPS gameplay (config key: fps_fov) */
@@ -131,9 +142,9 @@ typedef struct {
     ControlScheme classic;
     ControlScheme altcam;
 
-    /* Global (scheme-independent) binds. */
+    /* Global (scheme-independent) binds. Change Camera / Reload / Cycle Weapons /
+     * Quick Heal are per-scheme now — they live in ControlScheme above. */
     char keyQuickSave[24], keyQuickLoad[24]; /* PC-only: quick save/load screen hotkeys */
-    char keyChangeCam[24], padChangeCam[24]; /* PC-only: Change Camera (cycle control style) */
     char keySwapShoulder[24]; /* PC-only: swap OTS shoulder side (default Mouse3) */
     char keyConsole[24]; /* PC-only: dev console toggle key (default tilde "`"); keyboard-only */
     /* PC-only graphics-effect tuning keys (keyboard-only). keyGfxCycle switches

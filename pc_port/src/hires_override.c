@@ -29,6 +29,7 @@ typedef struct {
     int      hiresW, hiresH;     /* actual pixel dimensions of decoded RGBA */
     int      sourceBitDepth;     /* TIM mode of the loose file itself */
     unsigned packBytes;          /* GL bytes charged to the pack budget (0 = uncounted) */
+    unsigned long long contentHash; /* TexPack_LastComposeHash of the resident texture; 0 = unknown/always re-upload */
 } HiresEntry;
 
 static HiresEntry g_entries[MAX_HIRES_OVERRIDES];
@@ -36,6 +37,14 @@ static int        g_numEntries = 0;
 static int        g_initialized = 0;
 
 static int upload_rgba(TextureID* tex, const unsigned char* rgba, int w, int h, int nearest);
+
+/* One-shot: set to 1 immediately before an upload_rgba call to suppress mipmaps for
+ * that upload. 2D-UI overrides (fonts / HUD / 2D backgrounds) are drawn at a fixed 2D
+ * size, never minified at distance, so trilinear mip minification only blends adjacent
+ * font-atlas glyphs together — the "ghost text" regression from f47c1f871, which added
+ * mipmaps for WORLD art at distance. World/pool-slot uploads leave this 0 (keep mips).
+ * Captured + cleared at the top of upload_rgba so an error return can't leak it. */
+static int s_uploadNoMipmap = 0;
 
 /* ---- Texture-pack GL byte budget ------------------------------------------
  * A DuckStation pack composes + uploads a pack-resolution RGBA texture (with
@@ -317,6 +326,7 @@ int HiresOverride_RegisterFromTim(const char* timPath,
     }
 
     TextureID tex = 0;
+    s_uploadNoMipmap = 1; /* 2D-UI override (font/HUD/2D-bg): no mip -> no glyph-blend ghost */
     if (upload_rgba(&tex, rgba, hiW, hiH, 0) != 0)
     {
         free(rgba);
@@ -356,6 +366,7 @@ typedef struct {
     unsigned rowPackBytes[HIRES_POOL_MAX_ROWS]; /* pack-budget charge per row */
     unsigned short rowW[HIRES_POOL_MAX_ROWS];   /* GL texture pixel dims per row — */
     unsigned short rowH[HIRES_POOL_MAX_ROWS];   /* the shader's footprint clamp */
+    unsigned long long rowHash[HIRES_POOL_MAX_ROWS]; /* TexPack_LastComposeHash of each resident row; 0 = unknown */
 } PoolSlotEntry;
 
 static PoolSlotEntry g_poolSlots[HIRES_POOL_SLOT_MAX];
@@ -436,6 +447,10 @@ int HiresOverride_PoolSlotRegister(int slotId,
             free(rgba);
             rowSlot->rowW[rowIdx] = (unsigned short)w;
             rowSlot->rowH[rowIdx] = (unsigned short)h;
+            /* This row now holds base/loose content, not a keyed pack composite —
+             * invalidate the compose-hash so the redundant-upload skip can never
+             * mistake a later pack upload for this row's current content. */
+            rowSlot->rowHash[rowIdx] = 0;
             /* This row now holds base/loose content — release any pack charge a
              * previous occupant of the slot left on it. */
             pack_credit(&rowSlot->rowPackBytes[rowIdx]);
@@ -473,13 +488,65 @@ int HiresOverride_PoolSlotRegister(int slotId,
  * stay NEAREST with no mips (PSX-exact). Returns 0 on success. */
 static int upload_rgba(TextureID* tex, const unsigned char* rgba, int w, int h, int nearest)
 {
+    int noMipmap = s_uploadNoMipmap;
+    s_uploadNoMipmap = 0;
     if (rgba == NULL || w <= 0 || h <= 0) return -1;
-    return GR_UploadRGBATexture(tex, rgba, w, h, nearest, !nearest) ? 0 : -1;
+    return GR_UploadRGBATexture(tex, rgba, w, h, nearest,
+                                !nearest && !noMipmap) ? 0 : -1;
+#if 0 /* Superseded by the renderer-neutral upload API above. */
+    if (*tex == 0)
+    {
+        glGenTextures(1, tex);
+        if (*tex == 0) return -1;
+    }
+    glBindTexture(GL_TEXTURE_2D, *tex);
+    while (glGetError() != GL_NO_ERROR) { } /* drain stale errors */
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    /* ANY upload error must degrade to a clean miss, never a live-but-undefined
+     * texture. Only GL_OUT_OF_MEMORY was handled; but on the Intel HD 4600
+     * driver a large resident-texture working set can make glTexImage2D fail
+     * with other errors while leaving the GL name live over undefined storage.
+     * HiresOverride_LookupByTpageClut then returns that name as a HIT, and the
+     * 32-bit override shader's `discard alpha<0.5` renders the undefined texels:
+     * stale VRAM = vertical rainbow on Intel (modern drivers zero the storage =
+     * transparent = invisible). Deleting the texture on any error makes the
+     * lookup miss cleanly so the prim samples the zeroed VRAM texture instead —
+     * invisible, matching the discrete-GPU result. On a conformant driver a
+     * valid upload raises no error, so working setups are unaffected. */
+    {
+        GLenum uploadErr = glGetError();
+        if (uploadErr != GL_NO_ERROR)
+        {
+            static int s_oomLog = 0;
+            if (s_oomLog < 8) { SH_DBG("[POOLTEX] GL error 0x%X on %dx%d upload — keeping native art", (unsigned)uploadErr, w, h); s_oomLog++; }
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glDeleteTextures(1, tex);
+            *tex = 0;
+            return -1;
+        }
+    }
+    if (!nearest && !noMipmap && glGenerateMipmap != NULL)
+    {
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    }
+    else
+    {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return 0;
+#endif
 }
 
-int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
-                                       const unsigned char* rgba, int w, int h,
-                                       int nativePixelW, int nativePixelH)
+int HiresOverride_PoolSlotRegisterRGBAKeyed(int slotId, int row,
+                                            const unsigned char* rgba, int w, int h,
+                                            int nativePixelW, int nativePixelH,
+                                            unsigned long long contentHash)
 {
     if (!g_initialized) HiresOverride_Init();
     if (slotId < 0 || slotId >= HIRES_POOL_SLOT_MAX ||
@@ -490,12 +557,31 @@ int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
     }
 
     PoolSlotEntry* s = &g_poolSlots[slotId];
+
+    /* Redundant re-upload skip: the engine re-uploads the same TIM to VRAM
+     * constantly (room churn, animated CLUTs resolving to the same palette),
+     * and glTexImage2D reallocates VRAM each time — thousands of needless
+     * re-uploads per session stutter and fragment VRAM (the ~30-min crash). A
+     * matching content hash + same dims + a live texture means this row's GL
+     * texture is ALREADY correct; keep it and its budget charge untouched. The
+     * glTexture!=0 test makes a stale hash after a slot reset (glTexture zeroed)
+     * force a genuine re-upload. */
+    if (contentHash != 0 && s->rowHash[row] == contentHash && s->glTexture[row] != 0 &&
+        s->rowW[row] == (unsigned short)w && s->rowH[row] == (unsigned short)h)
+    {
+        s->nativeW = nativePixelW;
+        s->nativeH = nativePixelH;
+        return 0;
+    }
+
     if (upload_rgba(&s->glTexture[row], rgba, w, h,
                     (w == nativePixelW && h == nativePixelH)) != 0)
     {
+        s->rowHash[row] = 0;
         return -1;
     }
     pack_charge(&s->rowPackBytes[row], w, h);
+    s->rowHash[row] = contentHash;
     s->rowW[row] = (unsigned short)w;
     s->rowH[row] = (unsigned short)h;
     s->nativeW = nativePixelW;
@@ -503,12 +589,21 @@ int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
     return 0;
 }
 
-int HiresOverride_RegisterRGBA(const char* label,
-                               const unsigned char* rgba, int w, int h,
-                               int targetVramX, int targetVramY,
-                               int targetVramW, int targetVramH,
-                               int targetClutX, int targetClutY,
-                               int originalBitDepth)
+int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
+                                       const unsigned char* rgba, int w, int h,
+                                       int nativePixelW, int nativePixelH)
+{
+    return HiresOverride_PoolSlotRegisterRGBAKeyed(slotId, row, rgba, w, h,
+                                                   nativePixelW, nativePixelH, 0);
+}
+
+int HiresOverride_RegisterRGBAKeyed(const char* label,
+                                    const unsigned char* rgba, int w, int h,
+                                    int targetVramX, int targetVramY,
+                                    int targetVramW, int targetVramH,
+                                    int targetClutX, int targetClutY,
+                                    int originalBitDepth,
+                                    unsigned long long contentHash)
 {
     HiresEntry* e = NULL;
     int i;
@@ -530,6 +625,17 @@ int HiresOverride_RegisterRGBA(const char* label,
             break;
         }
     }
+
+    /* Redundant re-upload skip (see the pool-slot registrar): a found entry
+     * whose content is byte-identical (same hash + dims + a live texture) is
+     * already correct. The same VRAM rect re-uploads every room reload; skip
+     * the glTexImage2D churn that stutters and fragments VRAM. */
+    if (e != NULL && contentHash != 0 && e->contentHash == contentHash &&
+        e->glTexture != 0 && e->hiresW == w && e->hiresH == h)
+    {
+        return 0;
+    }
+
     if (e == NULL)
     {
         if (g_numEntries >= MAX_HIRES_OVERRIDES)
@@ -539,10 +645,13 @@ int HiresOverride_RegisterRGBA(const char* label,
         }
         e = &g_entries[g_numEntries];
         e->glTexture = 0;
+        e->contentHash = 0;
     }
 
+    s_uploadNoMipmap = 1; /* 2D-UI override (font/HUD/2D-bg): no mip -> no glyph-blend ghost */
     if (upload_rgba(&e->glTexture, rgba, w, h, 0) != 0)
     {
+        e->contentHash = 0;
         return -1;
     }
     if (e == &g_entries[g_numEntries])
@@ -551,6 +660,7 @@ int HiresOverride_RegisterRGBA(const char* label,
         g_numEntries++;
     }
     pack_charge(&e->packBytes, w, h);
+    e->contentHash = contentHash;
 
     e->vramX = targetVramX;
     e->vramY = targetVramY;
@@ -572,6 +682,18 @@ int HiresOverride_RegisterRGBA(const char* label,
         s_rgbaLog++;
     }
     return 0;
+}
+
+int HiresOverride_RegisterRGBA(const char* label,
+                               const unsigned char* rgba, int w, int h,
+                               int targetVramX, int targetVramY,
+                               int targetVramW, int targetVramH,
+                               int targetClutX, int targetClutY,
+                               int originalBitDepth)
+{
+    return HiresOverride_RegisterRGBAKeyed(label, rgba, w, h, targetVramX, targetVramY,
+                                           targetVramW, targetVramH, targetClutX, targetClutY,
+                                           originalBitDepth, 0);
 }
 
 /* A loose per-row PNG/TIM overlays ONE palette row on top of the disc-decoded

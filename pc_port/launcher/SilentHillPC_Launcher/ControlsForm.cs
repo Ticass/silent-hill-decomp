@@ -41,6 +41,7 @@ public class ControlsForm : Form
         new[] { "Aim",              "key_r2" },
         new[] { "Pause",            "key_start" },
         new[] { "Inventory",        "key_select" },
+        new[] { "Reload",           "key_reload" },
     };
 
     // PC-only hotkeys, shown under the PSX binds with a small gap.
@@ -64,12 +65,15 @@ public class ControlsForm : Form
         new[] { "Inventory",        "pad_select" },
     };
 
-    // Valid controller buttons (SDL names). D-pad/sticks excluded (movement).
+    // Valid controller buttons (SDL names). Sticks excluded (movement/look). The
+    // D-pad is included so it can be bound to actions once "Disable D-pad for
+    // movement" (Experimental) frees it from walking.
     private static readonly string[] ControllerButtons =
     {
         "a", "b", "x", "y",
         "leftshoulder", "rightshoulder", "lefttrigger", "righttrigger",
-        "leftstick", "rightstick", "start", "back", "guide", "NONE",
+        "leftstick", "rightstick", "start", "back", "guide",
+        "dpup", "dpdown", "dpleft", "dpright", "NONE",
     };
 
     // Default binding for each key, so a config without the line shows the
@@ -86,6 +90,11 @@ public class ControlsForm : Form
         { "key_swap_shoulder", "Mouse3" }, { "key_console", "`" },
         { "key_gfx_cycle", "\\" }, { "key_gfx_prev", "[" }, { "key_gfx_next", "]" },
         { "key_exit_game", "Escape" },
+        { "key_reload", "R" }, { "key_reload_2", "NONE" },
+        { "key_cycle_weapons", "NONE" }, { "key_quick_heal", "NONE" },
+        { "pad_reload", "NONE" }, { "pad_cycle_weapons", "NONE" }, { "pad_quick_heal", "NONE" },
+        { "key_quick_turn", "NONE" }, { "pad_quick_turn", "NONE" },
+        { "key_rear_look", "NONE" }, { "pad_rear_look", "NONE" },
         { "pad_cross", "a" }, { "pad_circle", "b" }, { "pad_triangle", "y" }, { "pad_square", "x" },
         { "pad_l1", "leftshoulder" }, { "pad_r1", "rightshoulder" }, { "pad_l2", "lefttrigger" }, { "pad_r2", "righttrigger" },
         { "pad_l3", "leftstick" }, { "pad_r3", "rightstick" }, { "pad_start", "start" }, { "pad_select", "back" },
@@ -107,6 +116,14 @@ public class ControlsForm : Form
         { "pad_l1", "NONE" }, { "pad_r1", "NONE" }, { "pad_l2", "NONE" }, { "pad_r2", "lefttrigger" },
         { "pad_start", "start" }, { "pad_select", "back" },
         { "pad_cross_2", "a" },
+        // PC-only actions (alt-cam scheme) — default to the same as classic until rebound.
+        { "key_change_cam", "F9" }, { "pad_change_cam", "rightstick" },
+        { "key_reload", "R" }, { "key_reload_2", "NONE" },
+        { "pad_reload", "NONE" },
+        { "key_cycle_weapons", "NONE" }, { "pad_cycle_weapons", "NONE" },
+        { "key_quick_heal", "NONE" }, { "pad_quick_heal", "NONE" },
+        { "key_quick_turn", "NONE" }, { "pad_quick_turn", "NONE" },
+        { "key_rear_look", "NONE" }, { "pad_rear_look", "NONE" },
     };
 
     // Per-scheme bind keys (saved twice: classic as-is, altcam with an "_altcam"
@@ -118,6 +135,16 @@ public class ControlsForm : Form
         var s = new HashSet<string>();
         foreach (var b in KeyboardBinds)   { s.Add(b[1]); s.Add(b[1] + "_2"); }
         foreach (var b in ControllerBinds) { s.Add(b[1]); s.Add(b[1] + "_2"); }
+        // PC-only actions are per-scheme too (classic vs alt-cam), riding the same
+        // _altcam save/load path. key_reload / key_reload_2 come from the KeyboardBinds
+        // loop above (Reload is a standard keyboard row); these standalone actions have
+        // no secondary (_2) slot.
+        foreach (var k in new[] { "key_change_cam", "pad_change_cam", "pad_reload",
+                                  "key_cycle_weapons", "pad_cycle_weapons",
+                                  "key_quick_heal", "pad_quick_heal",
+                                  "key_quick_turn", "pad_quick_turn",
+                                  "key_rear_look", "pad_rear_look" })
+            s.Add(k);
         return s;
     }
 
@@ -128,6 +155,9 @@ public class ControlsForm : Form
 
     private readonly Dictionary<string, Control> inputs = new Dictionary<string, Control>();
     private readonly List<TextBox> secondaryBoxes = new List<TextBox>();
+    // Rear Look rows (label + input, keyboard + controller): disabled unless the
+    // alt-cam scheme is selected, since Rear Look only works in TPS/OTS.
+    private readonly List<Control> rearLookControls = new List<Control>();
     private RadioButton debugYes;
     private RadioButton debugNo;
 
@@ -142,6 +172,7 @@ public class ControlsForm : Form
     private CheckBox chk2dControls;
     private CheckBox chkButtonSprint;
     private CheckBox chkTpsCameraCollision;
+    private CheckBox chkDisableDpad;
     private NumericUpDown numMouseSens;
     private NumericUpDown numControllerSens;
     private NumericUpDown numFpsFov;
@@ -201,7 +232,7 @@ public class ControlsForm : Form
         /* Height fits the sensitivity column, which is now the tallest: its last
          * slider (TPS/OTS Aim Zoom) bottoms out at styleY + 346 = 722. The bottom
          * button row is placed from ClientSize.Height, so it follows automatically. */
-        ClientSize = new Size(860, 790);
+        ClientSize = new Size(860, 868);
 
         tips = new ToolTip { AutoPopDelay = 20000, InitialDelay = 350, ReshowDelay = 80, ShowAlways = true };
 
@@ -295,6 +326,27 @@ public class ControlsForm : Form
         tips.SetToolTip(inputs["key_exit_game"],
             "Quits to desktop at the title/main menu; warm-reboots to the title during gameplay or a cutscene. Unbind to disable.");
 
+        // PC-only action binds (keyboard). Reload is a standard row under Inventory
+        // above; Cycle Weapons / Quick Heal / Quick Turn / Rear Look are here. Rear
+        // Look works only in TPS/OTS, so its row is disabled unless the alt-cam scheme
+        // is selected (top-right "Alt. Cam Controls").
+        int cycleHealY = exitGameY + rowH + 8;
+        AddKeyRow("Cycle Weapons", "key_cycle_weapons", colKbX, cycleHealY, labelW, inputW, false);
+        AddKeyRow("Quick Heal", "key_quick_heal", colKbX, cycleHealY + rowH, labelW, inputW, false);
+        AddKeyRow("Quick Turn", "key_quick_turn", colKbX, cycleHealY + rowH * 2, labelW, inputW, false);
+        Label lblRearLookKb = AddLabel("Rear Look", colKbX, cycleHealY + rowH * 3, labelW);
+        TextBox boxRearLookKb = MakeBindBox("key_rear_look", colKbX + labelW, cycleHealY + rowH * 3 - 3, inputW);
+        rearLookControls.Add(lblRearLookKb);
+        rearLookControls.Add(boxRearLookKb);
+        tips.SetToolTip(inputs["key_cycle_weapons"],
+            "Cycles the equipped weapon through the weapons you own, weakest to strongest.");
+        tips.SetToolTip(inputs["key_quick_heal"],
+            "Uses the most sensible healing item you are carrying (a stronger one when badly hurt, a drink otherwise).");
+        tips.SetToolTip(inputs["key_quick_turn"],
+            "Quick 180 turn — Harry spins to face the opposite direction (animated, not a snap).");
+        tips.SetToolTip(boxRearLookKb,
+            "Hold to swing the camera behind Harry (Thirdperson / Over-the-Shoulder only). Bind it with the alt-cam scheme selected.");
+
         // Controller binds — primary + an alternate (second button) per action.
         for (int i = 0; i < ControllerBinds.Length; i++)
         {
@@ -309,18 +361,54 @@ public class ControlsForm : Form
         AddLabel("Change Camera", colPadX, padChangeCamY, labelW);
         AddPadCombo("pad_change_cam", colPadX + labelW, padChangeCamY - 3, padInputW);
 
-        // --- Experimental section (right column, gap left above for a future
-        // control under Select) ---
-        int expY = padChangeCamY + rowH + 16;
-        AddHeader("Experimental", colPadX, expY);
+        // PC-only action binds (controller) — Reload / Cycle Weapons / Quick Heal /
+        // Quick Turn / Rear Look, in the room freed below by shifting Experimental
+        // down. Rear Look works only in TPS/OTS -> disabled unless alt-cam selected.
+        int padReloadY = padChangeCamY + rowH;
+        int padCycleY  = padReloadY + rowH;
+        int padHealY   = padCycleY + rowH;
+        int padQtY     = padHealY + rowH;
+        int padRlY     = padQtY + rowH;
+        AddLabel("Reload", colPadX, padReloadY, labelW);
+        AddPadCombo("pad_reload", colPadX + labelW, padReloadY - 3, padInputW);
+        AddLabel("Cycle Weapons", colPadX, padCycleY, labelW);
+        AddPadCombo("pad_cycle_weapons", colPadX + labelW, padCycleY - 3, padInputW);
+        AddLabel("Quick Heal", colPadX, padHealY, labelW);
+        AddPadCombo("pad_quick_heal", colPadX + labelW, padHealY - 3, padInputW);
+        AddLabel("Quick Turn", colPadX, padQtY, labelW);
+        AddPadCombo("pad_quick_turn", colPadX + labelW, padQtY - 3, padInputW);
+        Label lblRearLookPad = AddLabel("Rear Look", colPadX, padRlY, labelW);
+        AddPadCombo("pad_rear_look", colPadX + labelW, padRlY - 3, padInputW);
+        rearLookControls.Add(lblRearLookPad);
+        rearLookControls.Add(inputs["pad_rear_look"]);
+        foreach (Control _rl in rearLookControls) _rl.Enabled = chkAltCamControls.Checked;
+        tips.SetToolTip(inputs["pad_reload"],
+            "Reload the equipped firearm on the controller (same action as the keyboard Reload).");
+        tips.SetToolTip(inputs["pad_cycle_weapons"],
+            "Cycles the equipped weapon through the weapons you own, weakest to strongest.");
+        tips.SetToolTip(inputs["pad_quick_heal"],
+            "Uses the most sensible healing item you are carrying (a stronger one when badly hurt).");
+        tips.SetToolTip(inputs["pad_quick_turn"],
+            "Quick 180 turn — Harry spins to face the opposite direction (animated, not a snap).");
+        tips.SetToolTip(inputs["pad_rear_look"],
+            "Hold to swing the camera behind Harry (Thirdperson / Over-the-Shoulder only). Bind it with the alt-cam scheme selected.");
 
-        int styleY = expY + 30;
-        AddLabel("Control Style", colPadX, styleY, 90);
+        // --- Experimental section (right column) ---
+        // The whole left column (header, Control Style, all checkboxes) is shifted
+        // down to clear the new controller binds added above (Reload / Cycle Weapons
+        // / Quick Heal). The sensitivity sliders keep the original styleY so they do
+        // NOT move; only the checkbox column (chkY) shifts.
+        int styleY = padChangeCamY + rowH + 16 + 30;   // sensitivity column (unshifted)
+        int chkY = styleY + 5 * rowH;                  // Experimental left column (shifted below the 5 controller PC rows)
+        AddHeader("Experimental", colPadX, chkY - 30);
+        AddLabel("Control Style", colPadX, chkY, 90);
         cmbControlStyle = new ComboBox
         {
             Left = colPadX + 90,
-            Top = styleY - 3,
-            Width = 180,
+            Top = chkY - 3,
+            Width = 90,             // half width — its old 180 overlapped the sensitivity column
+            DropDownWidth = 180,    // keep the open list readable
+
             DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = PanelBack,
             ForeColor = TextColor,
@@ -332,7 +420,7 @@ public class ControlsForm : Form
         {
             Text = "Invert Mouse Y",
             Left = colPadX,
-            Top = styleY + 30,
+            Top = chkY + 30,
             Width = 160,
             ForeColor = TextColor,
         };
@@ -340,7 +428,7 @@ public class ControlsForm : Form
         {
             Text = "Invert Controller Y",
             Left = colPadX,
-            Top = styleY + 56,
+            Top = chkY + 56,
             Width = 180,
             ForeColor = TextColor,
         };
@@ -348,7 +436,7 @@ public class ControlsForm : Form
         {
             Text = "OTS aiming in Thirdperson",
             Left = colPadX,
-            Top = styleY + 82,
+            Top = chkY + 82,
             Width = 220,
             ForeColor = TextColor,
         };
@@ -356,7 +444,7 @@ public class ControlsForm : Form
         {
             Text = "Crosshair (aiming, TPS/OTS)",
             Left = colPadX,
-            Top = styleY + 108,
+            Top = chkY + 108,
             Width = 220,
             ForeColor = TextColor,
         };
@@ -364,7 +452,7 @@ public class ControlsForm : Form
         {
             Text = "Immersive FPS head tracking",
             Left = colPadX,
-            Top = styleY + 134,
+            Top = chkY + 134,
             Width = 240,
             ForeColor = TextColor,
         };
@@ -381,7 +469,7 @@ public class ControlsForm : Form
         {
             Text = "2D Controls (screen-relative)",
             Left = colPadX,
-            Top = styleY + 160,
+            Top = chkY + 160,
             Width = 240,
             ForeColor = TextColor,
         };
@@ -509,7 +597,7 @@ public class ControlsForm : Form
         {
             Text = "Aim Assist (TPS/OTS)",
             Left = colPadX,
-            Top = styleY + 186,
+            Top = chkY + 186,
             Width = 200,
             ForeColor = TextColor,
         };
@@ -519,7 +607,7 @@ public class ControlsForm : Form
         {
             Text = "Always use button based sprinting",
             Left = colPadX,
-            Top = styleY + 212,
+            Top = chkY + 212,
             Width = 260,
             ForeColor = TextColor,
         };
@@ -533,7 +621,7 @@ public class ControlsForm : Form
         {
             Text = "Allow thirdperson camera collision",
             Left = colPadX,
-            Top = styleY + 238,
+            Top = chkY + 238,
             /* Kept clear of the sensitivity column (Left = colPadX + 235): this row
              * now sits beside the Thirdperson FOV slider. */
             Width = 230,
@@ -544,6 +632,22 @@ public class ControlsForm : Form
             "Thirdperson / Over-the-Shoulder cameras only: when a wall would come between the camera and Harry, " +
             "pull the camera in so it stays on his side of it (on = the default). Off = the camera holds its full " +
             "orbit distance and is allowed to pass through geometry.");
+
+        chkDisableDpad = new CheckBox
+        {
+            Text = "Disable D-pad for movement",
+            Left = colPadX,
+            Top = chkY + 264,
+            Width = 210,
+            ForeColor = TextColor,
+        };
+        Controls.Add(chkDisableDpad);
+        tips.SetToolTip(chkDisableDpad,
+            "Stops the controller D-pad from walking / turning Harry, freeing it to be bound to actions — pick " +
+            "dpup / dpdown / dpleft / dpright for Reload, Cycle Weapons, Quick Heal, or any controller bind above. " +
+            "The D-pad still navigates menus and the inventory, and keyboard arrow keys are unaffected. " +
+            "Off = the D-pad moves Harry as usual.");
+
         tips.SetToolTip(chkAimAssist,
             "Thirdperson / Over-the-Shoulder free-aim only (NOT first person): when the reticle is over an enemy " +
             "(mouse) or near one (controller), the shot is redirected onto the enemy's body so it connects instead of " +
@@ -614,9 +718,11 @@ public class ControlsForm : Form
         });
     }
 
-    private void AddLabel(string text, int x, int y, int w)
+    private Label AddLabel(string text, int x, int y, int w)
     {
-        Controls.Add(new Label { Text = text, Left = x, Top = y, Width = w, ForeColor = TextColor });
+        Label l = new Label { Text = text, Left = x, Top = y, Width = w, ForeColor = TextColor };
+        Controls.Add(l);
+        return l;
     }
 
     private void AddPadCombo(string cfgKey, int left, int top, int width)
@@ -859,6 +965,9 @@ public class ControlsForm : Form
 
     private void AltCamControls_CheckedChanged(object sender, EventArgs e)
     {
+        // Rear Look only works in TPS/OTS, so it is only editable in the alt-cam scheme.
+        foreach (Control c in rearLookControls) c.Enabled = chkAltCamControls.Checked;
+
         int next = chkAltCamControls.Checked ? 1 : 0;
         if (next == activeScheme) return;
         FlushUiToScheme(activeScheme);   // keep edits to the scheme we're leaving
@@ -927,6 +1036,7 @@ public class ControlsForm : Form
         chkAimAssist.Checked = config.Get("aim_assist", "1") == "1";
         chkButtonSprint.Checked = config.Get("altcam_button_sprint", "0") == "1";
         chkTpsCameraCollision.Checked = config.Get("tps_camera_collision", "1") == "1";
+        chkDisableDpad.Checked = config.Get("disable_dpad_movement", "0") == "1";
         numMouseSens.Value = ClampSens(config.Get("mouse_sensitivity", "1.0"));
         numControllerSens.Value = ClampSens(config.Get("controller_sensitivity", "1.0"));
         numFpsFov.Value = ClampFov(config.Get("fps_fov", "71.1"));
@@ -973,6 +1083,7 @@ public class ControlsForm : Form
         chkAimAssist.Checked = true;
         chkButtonSprint.Checked = false;
         chkTpsCameraCollision.Checked = true;
+        chkDisableDpad.Checked = false;
         numMouseSens.Value = 1.0m;
         numControllerSens.Value = 1.0m;
         numFpsFov.Value = 71.1m;
@@ -1106,6 +1217,7 @@ public class ControlsForm : Form
         config.Set("aim_assist", chkAimAssist.Checked ? "1" : "0");
         config.Set("altcam_button_sprint", chkButtonSprint.Checked ? "1" : "0");
         config.Set("tps_camera_collision", chkTpsCameraCollision.Checked ? "1" : "0");
+        config.Set("disable_dpad_movement", chkDisableDpad.Checked ? "1" : "0");
         config.Set("mouse_sensitivity",
             ((double)numMouseSens.Value).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
         config.Set("controller_sensitivity",

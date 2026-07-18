@@ -30,7 +30,7 @@ namespace SilentHillPC_Launcher
     /// </summary>
     public static class ClutComposer
     {
-        private struct Prim { public int[] U; public int[] V; public int Row; }
+        private struct Prim { public int[] U; public int[] V; public int Row; public bool Tri; }
 
         private static ushort U16(byte[] d, int o) { return (ushort)(d[o] | (d[o + 1] << 8)); }
         private static int U32(byte[] d, int o) { return d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 24); }
@@ -65,7 +65,9 @@ namespace SilentHillPC_Launcher
                         int clut = U16(d, pb + 2);
                         int mat = (U16(d, pb + 6) >> 8) & 0x7F;
                         int bcy = (mat < baseClutY.Length) ? baseClutY[mat] : 0;
-                        var pr = new Prim { U = new int[4], V = new int[4], Row = (clut >> 6) - bcy };
+                        // Triangle prims set the 4th vertex index (field_C[3]) to 0xFF and leave
+                        // UV3 garbage (0,0); rasterising them as a quad drags a streak to (0,0).
+                        var pr = new Prim { U = new int[4], V = new int[4], Row = (clut >> 6) - bcy, Tri = d[pb + 0xF] == 0xFF };
                         int j = 0;
                         foreach (int o in new[] { 0, 4, 8, 0xA })
                         {
@@ -106,11 +108,9 @@ namespace SilentHillPC_Launcher
             for (int i = 0; i < rm.Length; i++) rm[i] = -1;
             foreach (var p in prims)
             {
-                // winding-agnostic: union of the fan triangles covers a convex quad/tri
                 FillTri(rm, p.U[0], p.V[0], p.U[1], p.V[1], p.U[2], p.V[2], p.Row, W, H);
-                FillTri(rm, p.U[0], p.V[0], p.U[2], p.V[2], p.U[3], p.V[3], p.Row, W, H);
-                FillTri(rm, p.U[0], p.V[0], p.U[1], p.V[1], p.U[3], p.V[3], p.Row, W, H);
-                FillTri(rm, p.U[1], p.V[1], p.U[2], p.V[2], p.U[3], p.V[3], p.Row, W, H);
+                if (!p.Tri) // quad: second triangle, PSX FT4 winding v0v1v2 / v1v3v2
+                    FillTri(rm, p.U[1], p.V[1], p.U[3], p.V[3], p.U[2], p.V[2], p.Row, W, H);
             }
             for (int d = 0; d < dilate; d++) rm = Dilate(rm, W, H);
             return rm;
@@ -209,11 +209,14 @@ namespace SilentHillPC_Launcher
                 byte[] edit; int ew, eh;
                 if (!LoadRgba(editedPng, out edit, out ew, out eh, out res.Error)) return res;
                 res.Width = ew; res.Height = eh;
-                if (ew != W || eh != H)
+                // Native size OR an HD upscale of the same aspect ratio; the runtime scales each
+                // per-row PNG, so HD detail is preserved. Exact multiples (2x/4x/8x) look sharpest.
+                if (ew < W || eh < H || Math.Abs((long)ew * H - (long)eh * W) > (long)ew * H / 25)
                 {
                     res.Error = string.Format(
-                        "Edited image is {0}x{1} but this texture sheet is {2}x{3}. This version needs a " +
-                        "native-resolution edit; HD upscaling is a later addition.", ew, eh, W, H);
+                        "Edited image is {0}x{1}. It must be the sheet's native {2}x{3} or an upscale " +
+                        "keeping that aspect ratio (e.g. {4}x{5} or {6}x{7}). For sharpest region edges " +
+                        "use an exact multiple.", ew, eh, W, H, W * 2, H * 2, W * 4, H * 4);
                     return res;
                 }
 
@@ -231,19 +234,59 @@ namespace SilentHillPC_Launcher
                 int pad = (clutRows > 100) ? 3 : 2;
                 Directory.CreateDirectory(outDir);
 
+                // map each edited pixel to its native texel -> row, keeping the full HD pixels
+                var sxm = new int[ew]; for (int x = 0; x < ew; x++) sxm[x] = x * W / ew;
+                var sym = new int[eh]; for (int y = 0; y < eh; y++) sym[y] = y * H / eh;
                 foreach (int r in emit)
                 {
-                    var buf = new byte[W * H * 4]; // transparent by default
-                    for (int i = 0; i < W * H; i++)
-                        if (rm[i] == r) Buffer.BlockCopy(edit, i * 4, buf, i * 4, 4);
+                    var buf = new byte[ew * eh * 4]; // transparent by default
+                    for (int y = 0; y < eh; y++)
+                    {
+                        int rowBase = sym[y] * W;
+                        for (int x = 0; x < ew; x++)
+                            if (rm[rowBase + sxm[x]] == r) { int o = (y * ew + x) * 4; Buffer.BlockCopy(edit, o, buf, o, 4); }
+                    }
                     string png = Path.Combine(outDir, full + ".p" + r.ToString("D" + pad) + ".png");
-                    using (var bmp = RgbaToBitmap(buf, W, H))
+                    using (var bmp = RgbaToBitmap(buf, ew, eh))
                         bmp.Save(png, ImageFormat.Png);
                     res.Written.Add(png);
                 }
                 return res;
             }
             catch (Exception ex) { res.Error = ex.Message; return res; }
+        }
+
+        // ---- batch: build every character's reference composite under a folder --
+
+        public class ComposeAllResult
+        {
+            public int Made;
+            public int Failed;
+            public readonly List<string> Failures = new List<string>();
+        }
+
+        /// <summary>Walk <paramref name="root"/> for every .ILM that has a matching .TIM beside it
+        /// and write NAME_reference.png next to it. ILMs with no texture are skipped silently.</summary>
+        public static ComposeAllResult ComposeAll(string root, Action<int, int, string> report)
+        {
+            var res = new ComposeAllResult();
+            string[] ilms;
+            try { ilms = Directory.GetFiles(root, "*.ilm", SearchOption.AllDirectories); }
+            catch (Exception ex) { res.Failures.Add(ex.Message); return res; }
+            for (int i = 0; i < ilms.Length; i++)
+            {
+                string ilm = ilms[i];
+                if (!ilm.EndsWith(".ilm", StringComparison.OrdinalIgnoreCase)) continue; // 8.3 wildcard guard
+                if (report != null) report(i, ilms.Length, Path.GetFileName(ilm));
+                string tim = ResolveTim(ilm, null);
+                if (tim == null) continue; // no texture beside it -> not a composable character
+                string outPng = Path.Combine(Path.GetDirectoryName(ilm),
+                    Path.GetFileNameWithoutExtension(ilm) + "_reference.png");
+                string err;
+                if (Compose(ilm, tim, outPng, out err)) res.Made++;
+                else { res.Failed++; res.Failures.Add(Path.GetFileName(ilm) + ": " + err); }
+            }
+            return res;
         }
 
         // ---- bitmap <-> RGBA helpers (R,G,B,A byte order) -----------------------

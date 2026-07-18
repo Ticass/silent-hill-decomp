@@ -193,7 +193,10 @@ def parse_ilm(data):
                 mat = (flags >> 8) & 0x7F
                 base = materials[mat]["base_cluty"] if mat < len(materials) else 0
                 uvs = [(_u16(data, pb + o) & 0xFF, _u16(data, pb + o) >> 8) for o in (0, 4, 8, 0xA)]
-                prims.append(dict(uvs=uvs, row=(clut >> 6) - base, mat=mat))
+                # Triangle prims set the 4th vertex index (field_C[3]) to 0xFF and leave
+                # UV3 as garbage (0,0); rasterising them as a quad drags a streak to (0,0).
+                is_tri = data[pb + 0xF] == 0xFF
+                prims.append(dict(uvs=uvs, row=(clut >> 6) - base, mat=mat, tri=is_tri))
     return materials, prims
 
 
@@ -220,11 +223,9 @@ def build_rowmap(prims, W, H, dilate=1):
     for p in prims:
         uv = p["uvs"]
         r = p["row"]
-        # winding-agnostic: the union of these fan triangles covers a convex quad/tri
         _fill_tri(rowmap, uv[0], uv[1], uv[2], r, W, H)
-        _fill_tri(rowmap, uv[0], uv[2], uv[3], r, W, H)
-        _fill_tri(rowmap, uv[0], uv[1], uv[3], r, W, H)
-        _fill_tri(rowmap, uv[1], uv[2], uv[3], r, W, H)
+        if not p["tri"]:  # quad: second triangle, PSX FT4 winding v0v1v2 / v1v3v2
+            _fill_tri(rowmap, uv[1], uv[3], uv[2], r, W, H)
     for _ in range(max(0, dilate)):
         rowmap = _dilate(rowmap, W, H)
     return rowmap
@@ -283,26 +284,36 @@ def split(edited_path, ilm_path, tim_path, out_dir):
     _mats, prims = parse_ilm(open(ilm_path, "rb").read())
     W, H = tim["w"], tim["h"]
     rgba, ew, eh = read_png_rgba(edited_path)
-    if (ew, eh) != (W, H):
-        raise SystemExit("edited image is %dx%d but the texture sheet is %dx%d; "
-                         "v1 needs a native-resolution edit (HD support is a later add)"
-                         % (ew, eh, W, H))
+    # The edit may be the sheet's native size OR an HD upscale of it — the runtime uploads each
+    # per-row PNG as full RGBA and scales it, so HD detail is kept as-is. Require only that the
+    # aspect ratio matches; an exact integer multiple (2x/4x/8x) gives the sharpest region edges.
+    if ew < W or eh < H or abs(ew * H - eh * W) > (ew * H) // 25:
+        raise SystemExit(
+            "edited image is %dx%d; it must be the sheet's native %dx%d or an upscale keeping that "
+            "aspect ratio (e.g. %dx%d, %dx%d). For sharpest region edges use an exact multiple."
+            % (ew, eh, W, H, W * 2, H * 2, W * 4, H * 4))
     rowmap = build_rowmap(prims, W, H, dilate=1)  # dilate so no drawn texel becomes a hole
     used = sorted({r for r in rowmap if r >= 0})
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(tim_path))[0]
     full = os.path.basename(tim_path) if tim_path.upper().endswith(".TIM") else stem + ".TIM"
     pad = 3 if tim["clutH"] > 100 else 2
-    written = []
     rows_to_emit = sorted(set(used) | {0})  # p00 is the runtime's per-row sentinel
+    # Map each edited pixel to its native texel -> palette row, in one pass, keeping full HD pixels.
+    sx = [(x * W) // ew for x in range(ew)]
+    sy = [(y * H) // eh for y in range(eh)]
+    bufs = {r: bytearray(ew * eh * 4) for r in rows_to_emit}
+    for y in range(eh):
+        base = sy[y] * W
+        for x in range(ew):
+            b = bufs.get(rowmap[base + sx[x]])
+            if b is not None:
+                o = (y * ew + x) * 4
+                b[o:o + 4] = rgba[o:o + 4]  # only row-r prims sample this PNG; rest stays transparent
+    written = []
     for r in rows_to_emit:
-        buf = bytearray(W * H * 4)
-        for i in range(W * H):
-            if rowmap[i] == r:
-                buf[i * 4:i * 4 + 4] = rgba[i * 4:i * 4 + 4]
-            # else: leave transparent — only row-r prims sample this PNG
         png = os.path.join(out_dir, "%s.p%0*d.png" % (full, pad, r))
-        write_png_rgba(png, W, H, bytes(buf))
+        write_png_rgba(png, ew, eh, bytes(bufs[r]))
         written.append(png)
     print("split: %s -> %d per-row PNG(s) in %s  (rows used: %s)"
           % (os.path.basename(edited_path), len(written), out_dir,

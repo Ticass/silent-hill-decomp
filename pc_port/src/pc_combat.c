@@ -7,8 +7,12 @@
 #include "bodyprog/math/math.h"
 #include "bodyprog/collision/ray.h"
 #include "pc_combat.h"
+#include "pc_config.h"
+#include "bodyprog/item_screens.h"
+#include "bodyprog/sound/sound_system.h"
 
 extern const unsigned char* g_sdlKeyboardState;
+extern int PsyX_RawControllerButtonHeld(int sdlGameControllerButton);
 extern int                  g_PcAimDevice; /* 0 = mouse, 1 = controller (game_main.c) */
 
 /* Player bullet "fat hitbox" — single source of truth shared with ray.c
@@ -25,6 +29,20 @@ s32    g_PcBulletHitActive = 0;
 q19_12 g_PcBulletVertMul   = Q12(2.0f); /* vertical reach added each side = 2x collision radius */
 q19_12 g_PcBulletRadMul    = Q12(1.0f); /* horizontal radius added = 1x collision radius */
 
+/* PC-only: one-frame request that a Quick Turn (animated 180) start this frame.
+ * Set by Pc_ExtraActionsUpdate on the bind edge; consumed + cleared by
+ * Player_LogicUpdate (native state machine or the movement shim). */
+int g_PcQuickTurnRequest = 0;
+
+/* PC-only: 1 while the Rear Look bind is HELD in a TPS/OTS camera. Set every
+ * frame by Pc_RearLookUpdate; consumed by Pc_TpsCamera_Apply (orbit +180) and
+ * the head-look override in Player_Update. */
+int g_PcRearLookActive = 0;
+
+/* PC-only: Quick Heal green screen pulse — Q12 seconds remaining. Counted down and
+ * drawn each frame by Pc_HealFlashUpdate (hooked in game_main.c). 0 = no flash. */
+s32 g_PcHealFlashTimer = 0;
+
 /* Returns true on the frame `sdlScancode` transitions 0→1.
  *
  * Frame-stable: prev-state is sampled at most once per VBlank, so multiple
@@ -34,7 +52,7 @@ q19_12 g_PcBulletRadMul    = Q12(1.0f); /* horizontal radius added = 1x collisio
  * (since each fresh slot starts with prev=0), instantly closing it. */
 bool PC_KeyboardKeyClicked(int sdlScancode)
 {
-    #define PC_KEY_CACHE_SIZE 8
+    #define PC_KEY_CACHE_SIZE 16 /* both schemes' reload/reload2/cycle/heal/quick-turn keys share this never-evicting cache */
     static int  s_keys[PC_KEY_CACHE_SIZE]   = {0};
     static bool s_prev[PC_KEY_CACHE_SIZE]   = {0};
     static bool s_edge[PC_KEY_CACHE_SIZE]   = {0};
@@ -71,20 +89,313 @@ bool PC_KeyboardKeyClicked(int sdlScancode)
     return s_edge[slot];
 }
 
-/* Returns true on the rising edge of the manual-reload key (R) while a gun
- * weapon is equipped with reserve ammo available.
- *
- * The PSX game had no manual reload input — reload triggered automatically
- * on a fire-with-empty-clip. PC adds a dedicated R-key reload as a
- * convenience, bound outside the PSX controller mapping (so all PSX buttons
- * keep their original semantics: Triangle still opens map, Square still
- * runs, etc.). */
+/* Frame-stable rising edge of a PHYSICAL controller button (SDL game-controller
+ * button index). Mirrors PC_KeyboardKeyClicked: prev-state is sampled at most once
+ * per VBlank so multiple callers in one frame see the same edge. Reads the physical
+ * controller (not the kb-merged pad), so a keyboard key on the same PSX bit can't
+ * trigger a controller-only action. sdlButton < 0 (unbound) never fires. */
+bool PC_RawControllerButtonClicked(int sdlButton)
+{
+    #define PC_PAD_CACHE_SIZE 16 /* both schemes' reload/cycle/heal/quick-turn buttons share this never-evicting cache */
+    static int  s_btn[PC_PAD_CACHE_SIZE]    = {0};
+    static bool s_prevP[PC_PAD_CACHE_SIZE]  = {0};
+    static bool s_edgeP[PC_PAD_CACHE_SIZE]  = {0};
+    static s32  s_frameP[PC_PAD_CACHE_SIZE] = {0};
+    static int  s_countP                    = 0;
+
+    if (sdlButton < 0) return false;
+
+    int slot = -1;
+    for (int i = 0; i < s_countP; i++) {
+        if (s_btn[i] == sdlButton) { slot = i; break; }
+    }
+    if (slot < 0) {
+        if (s_countP >= PC_PAD_CACHE_SIZE) return false;
+        slot = s_countP++;
+        s_btn[slot]    = sdlButton;
+        s_prevP[slot]  = PsyX_RawControllerButtonHeld(sdlButton) != 0;
+        s_edgeP[slot]  = false;
+        s_frameP[slot] = g_VBlanks;
+        return false;
+    }
+    if (s_frameP[slot] != g_VBlanks) {
+        bool nowHeld = PsyX_RawControllerButtonHeld(sdlButton) != 0;
+        s_edgeP[slot] = nowHeld && !s_prevP[slot];
+        s_prevP[slot] = nowHeld;
+        s_frameP[slot] = g_VBlanks;
+    }
+    return s_edgeP[slot];
+}
+
+/* Returns true on the rising edge of the manual-reload bind while a gun weapon is
+ * equipped with reserve ammo available. Bound outside the PSX controller mapping so
+ * every PSX button keeps its original semantics; now configurable on BOTH keyboard
+ * (key_reload, default R) and controller (pad_reload, default unbound). The PSX game
+ * had no manual reload — it fired automatically on empty; PC adds this convenience. */
 bool PC_PlayerManualReloadRequested(void)
 {
-    return PC_KeyboardKeyClicked(SDL_SCANCODE_R) &&
+    static SDL_Scancode s_kb[2]  = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static SDL_Scancode s_kb2[2] = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN }; /* keyboard secondary */
+    static int          s_pad[2] = { -2, -2 }; /* [scheme]; -2 = unresolved */
+    extern int          g_DebugThirdPersonCam;
+    int sch;
+    if (s_pad[0] == -2) {
+        const ControlScheme* sc[2];
+        int i;
+        sc[0] = &g_PcConfig.classic;
+        sc[1] = &g_PcConfig.altcam;
+        for (i = 0; i < 2; i++) {
+            s_kb[i]  = SDL_GetScancodeFromName(sc[i]->keyReload);
+            s_kb2[i] = SDL_GetScancodeFromName(sc[i]->keyReload2);
+            s_pad[i] = (sc[i]->padReload[0] != '\0')
+                        ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padReload)
+                        : SDL_CONTROLLER_BUTTON_INVALID;
+        }
+    }
+    sch = g_DebugThirdPersonCam ? 1 : 0;
+    return ((s_kb[sch]  != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(s_kb[sch]))  ||
+            (s_kb2[sch] != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(s_kb2[sch])) ||
+            (s_pad[sch] >= 0 && PC_RawControllerButtonClicked(s_pad[sch]))) &&
            g_SysWork.playerCombat.weaponAttack >= WEAPON_ATTACK(EquippedWeaponId_Handgun, AttackInputType_Tap) &&
            g_SysWork.playerCombat.totalWeaponAmmo != 0 &&
            INV_ITEM_GROUP(g_SavegamePtr->equippedWeapon) == InvItemGroup_GunWeapons;
+}
+
+/* ---- Cycle Weapons + Quick Heal (bound, dispatched once per frame) ---------- */
+
+extern void GameFs_WeaponInfoUpdate(void); /* player.h — loads the equipped weapon model/anim */
+
+static s32 Pc_FindItemSlot(u8 id)
+{
+    s32 i;
+    for (i = 0; i < INV_ITEM_COUNT_MAX; i++)
+        if (g_SavegamePtr->items[i].id_0 == id) return i;
+    return NO_VALUE;
+}
+
+/* Safe to swap weapon / heal outside the menu: in gameplay, control enabled, and
+ * the upper body idle/moving (not aiming/mid-swing/reloading — GameFs_WeaponInfoUpdate
+ * does a blocking model load, so it must not fire mid-combat). */
+static int Pc_ActionSafe(void)
+{
+    return g_GameWork.gameState == GameState_InGame &&
+           g_SysWork.sysState   == SysState_Gameplay &&
+           !g_Player_DisableControl &&
+           g_SysWork.playerWork.extra.upperBodyState <= PlayerUpperBodyState_SidestepRightStumble;
+}
+
+/* Equip one owned weapon — mirrors the load-time re-equip block
+ * (player_control.c:10312-10343) + the model reload. */
+static void Pc_EquipWeapon(u8 invItemId, s32 slot)
+{
+    s32 groupId = INV_ITEM_GROUP(invItemId);
+    g_Inventory_EquippedItem                  = invItemId;
+    g_SavegamePtr->equippedWeapon             = invItemId;
+    g_SysWork.playerCombat.weaponAttack       = invItemId + InvItemId_KitchenKnife; /* +0x80; s8 truncates to EquippedWeaponId */
+    g_SysWork.playerCombat.weaponInventoryIdx = slot;
+    g_SysWork.playerCombat.currentWeaponAmmo  = g_SavegamePtr->items[slot].count_1;
+    if (groupId == InvItemGroup_GunWeapons) {
+        s32 a = Pc_FindItemSlot(invItemId + InvItemId_HealthDrink); /* ammo id = weapon + 32 */
+        g_SysWork.playerCombat.totalWeaponAmmo = (a == NO_VALUE) ? 0 : (s8)g_SavegamePtr->items[a].count_1;
+    } else {
+        g_SysWork.playerCombat.totalWeaponAmmo = 0;
+    }
+    GameFs_WeaponInfoUpdate();
+
+    /* Swap the VISIBLE held-weapon model too — GameFs_WeaponInfoUpdate only reloads
+     * the info/anim/stat tables, NOT the geometry Harry holds (g_WorldGfxWork.heldItem).
+     * Mirror the inventory-exit sequence: reattach the grip bones for the new weapon
+     * class, point heldItem->itemId at the new weapon + queue its async model/texture
+     * read, and un-hide it. WorldGfx_HeldItemDraw polls the async load every frame and
+     * binds the new model when the read lands (a few frames later; no blocking wait, so
+     * no stutter — a brief empty hand until it binds). */
+    Gfx_PlayerHeldItemAttach(g_SysWork.playerCombat.weaponAttack);
+    WorldGfx_PlayerPrevHeldItem(&g_SysWork.playerCombat);
+    func_8003D01C();
+}
+
+/* Cycle to the next OWNED weapon in acquisition/enum order (wraps). */
+void Pc_CycleWeapons(void)
+{
+    static const u8 order[] = {
+        InvItemId_KitchenKnife, InvItemId_SteelPipe, InvItemId_RockDrill,
+        InvItemId_Hammer, InvItemId_Chainsaw, InvItemId_Katana, InvItemId_Axe,
+        InvItemId_Handgun, InvItemId_HuntingRifle, InvItemId_Shotgun, InvItemId_HyperBlaster,
+    };
+    s32 n = (s32)(sizeof(order) / sizeof(order[0]));
+    s32 cur = -1, i, k;
+    for (i = 0; i < n; i++)
+        if (order[i] == g_SavegamePtr->equippedWeapon) { cur = i; break; }
+    for (k = 1; k <= n; k++) {
+        s32 idx = cur + k;
+        idx %= n; if (idx < 0) idx += n;
+        s32 slot = Pc_FindItemSlot(order[idx]);
+        if (slot != NO_VALUE) { Pc_EquipWeapon(order[idx], slot); return; }
+    }
+}
+
+/* Auto-use the most sensible OWNED healing item for the current health. */
+void Pc_QuickHeal(void)
+{
+    q19_12 health  = g_SysWork.playerWork.player.health;
+    s32    hp      = health >> Q12_SHIFT;
+    s32    deficit = 100 - hp;
+    s32    drink, kit, amp;
+    u8     chosen  = InvItemId_Empty;
+
+    if (hp <= 0 || hp >= 100) return; /* dead or already full */
+
+    drink = Pc_FindItemSlot(InvItemId_HealthDrink);
+    kit   = Pc_FindItemSlot(InvItemId_FirstAidKit);
+    amp   = Pc_FindItemSlot(InvItemId_Ampoule);
+
+    if (hp < 10) {
+        /* critical: strongest available (ampoule also refills the regen buffer) */
+        if      (amp   != NO_VALUE) chosen = InvItemId_Ampoule;
+        else if (kit   != NO_VALUE) chosen = InvItemId_FirstAidKit;
+        else if (drink != NO_VALUE) chosen = InvItemId_HealthDrink;
+    } else if (deficit <= 40) {
+        /* light: a drink fills it with no waste; reserve stronger items */
+        if      (drink != NO_VALUE) chosen = InvItemId_HealthDrink;
+        else if (kit   != NO_VALUE) chosen = InvItemId_FirstAidKit;
+        else if (amp   != NO_VALUE) chosen = InvItemId_Ampoule;
+    } else {
+        /* moderate: first-aid is the tight fit; keep the ampoule for emergencies */
+        if      (kit   != NO_VALUE) chosen = InvItemId_FirstAidKit;
+        else if (drink != NO_VALUE) chosen = InvItemId_HealthDrink;
+        else if (amp   != NO_VALUE) chosen = InvItemId_Ampoule;
+    }
+    if (chosen == InvItemId_Empty) return; /* nothing owned */
+
+    switch (chosen) {
+        case InvItemId_FirstAidKit: health += Q12(80.0f);  break;
+        case InvItemId_HealthDrink: health += Q12(40.0f);  break;
+        case InvItemId_Ampoule:     health += Q12(100.0f); g_SavegamePtr->healthSaturation = Q12(300.0f); break;
+    }
+    g_SysWork.playerWork.player.health = CLAMP(health, Q12(0.0f), Q12(100.0f));
+    Sd_PlaySfx(Sfx_Unk1325, -0x40, 0x40); /* same feedback SFX as the inventory heal */
+    Player_ItemRemove(chosen, 1);
+    g_PcHealFlashTimer = Q12(0.35f); /* brief green heal pulse (drawn by Pc_HealFlashUpdate) */
+}
+
+/* Per-frame draw for the Quick Heal green pulse: an additive full-screen green TILE
+ * that eases out over ~0.35s. Mirrors the screen-fade full-screen-tile path (static
+ * double-buffered prims into OT2 bucket 4). Called from game_main.c after the fade
+ * update. Self-gates on the timer, so it is byte-identical output when not healing. */
+void Pc_HealFlashUpdate(void)
+{
+    static TILE     s_tile[2];
+    static DR_TPAGE s_tp[2];
+    int buf;
+    s32 g;
+
+    if (g_PcHealFlashTimer <= 0)
+        return;
+
+    g_PcHealFlashTimer -= g_DeltaTime; /* fps-independent countdown (Q12 seconds) */
+    if (g_PcHealFlashTimer < 0)
+        g_PcHealFlashTimer = 0;
+
+    buf = g_ActiveBufferIdx;
+    g   = (g_PcHealFlashTimer * 96) / Q12(0.35f); /* peak additive green ~96, eases to 0 */
+
+    setTile(&s_tile[buf]);
+    setSemiTrans(&s_tile[buf], 1);
+    setRGB0(&s_tile[buf], 0, (u8)g, 0);
+    setWH(&s_tile[buf], SCREEN_WIDTH * 4, SCREEN_HEIGHT * 2);
+    setXY0(&s_tile[buf], -SCREEN_WIDTH, -SCREEN_HEIGHT); /* cover the full Hor+ width */
+
+    setDrawTPage(&s_tp[buf], 0, 1, getTPageN(0, 1, 0, 0)); /* abr=1 = additive */
+
+    AddPrim(&g_OtTags0[buf][4], &s_tile[buf]);
+    AddPrim(&g_OtTags0[buf][4], &s_tp[buf]);
+}
+
+/* Per-frame dispatch for the bound Cycle Weapons + Quick Heal actions (reload is
+ * pulled by the combat FSM via PC_PlayerManualReloadRequested). Keyboard + physical
+ * controller, edge-detected; gated to safe gameplay. Called from game_main.c. */
+void Pc_ExtraActionsUpdate(void)
+{
+    static SDL_Scancode s_kbCycle[2] = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static SDL_Scancode s_kbHeal[2]  = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static SDL_Scancode s_kbQt[2]    = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static int          s_padCycle[2] = { -2, -2 }, s_padHeal[2] = { -2, -2 };
+    static int          s_padQt[2] = { -2, -2 };
+    extern int          g_DebugThirdPersonCam;
+    int cycleClicked, healClicked, qtClicked, sch;
+
+    if (s_padCycle[0] == -2) {
+        const ControlScheme* sc[2];
+        int i;
+        sc[0] = &g_PcConfig.classic;
+        sc[1] = &g_PcConfig.altcam;
+        for (i = 0; i < 2; i++) {
+            s_kbCycle[i]  = SDL_GetScancodeFromName(sc[i]->keyCycleWeapons);
+            s_kbHeal[i]   = SDL_GetScancodeFromName(sc[i]->keyQuickHeal);
+            s_kbQt[i]     = SDL_GetScancodeFromName(sc[i]->keyQuickTurn);
+            s_padCycle[i] = (sc[i]->padCycleWeapons[0] != '\0') ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padCycleWeapons) : SDL_CONTROLLER_BUTTON_INVALID;
+            s_padHeal[i]  = (sc[i]->padQuickHeal[0]    != '\0') ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padQuickHeal)    : SDL_CONTROLLER_BUTTON_INVALID;
+            s_padQt[i]    = (sc[i]->padQuickTurn[0]    != '\0') ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padQuickTurn)    : SDL_CONTROLLER_BUTTON_INVALID;
+        }
+    }
+    sch = g_DebugThirdPersonCam ? 1 : 0;
+
+    /* Sample the edges every frame (keeps prev-state current), act only in gameplay. */
+    cycleClicked = (s_kbCycle[sch] != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(s_kbCycle[sch])) ||
+                   (s_padCycle[sch] >= 0 && PC_RawControllerButtonClicked(s_padCycle[sch]));
+    healClicked  = (s_kbHeal[sch]  != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(s_kbHeal[sch]))  ||
+                   (s_padHeal[sch]  >= 0 && PC_RawControllerButtonClicked(s_padHeal[sch]));
+    qtClicked    = (s_kbQt[sch]    != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(s_kbQt[sch]))    ||
+                   (s_padQt[sch]    >= 0 && PC_RawControllerButtonClicked(s_padQt[sch]));
+
+    if (!Pc_ActionSafe())
+    {
+        g_PcQuickTurnRequest = 0; /* not safe gameplay -> drop any pending turn */
+        return;
+    }
+    if (cycleClicked) Pc_CycleWeapons();
+    if (healClicked)  Pc_QuickHeal();
+    /* Quick Turn: (re)assign the one-frame request every safe frame — never latch —
+     * so a press the current player sub-state ignores (e.g. the AFK look-around idle)
+     * can't queue a delayed 180 on the next movement input. Consumed + cleared in
+     * Player_LogicUpdate (native state entry or shim latch). */
+    g_PcQuickTurnRequest = qtClicked ? 1 : 0;
+}
+
+/* Per-frame HELD read for Rear Look: sets g_PcRearLookActive while the bind is
+ * held during TPS/OTS gameplay (never FPS or classic). Consumed by the camera
+ * (orbit +180) and the head-look override. Called from game_main.c. */
+void Pc_RearLookUpdate(void)
+{
+    static SDL_Scancode s_kb[2]  = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static int          s_pad[2] = { -2, -2 };
+    extern int          g_DebugThirdPersonCam;
+    extern int          g_PcFpsCam;
+    extern int          g_PcConsoleInputActive;
+    const Uint8*        keys;
+    int                 sch, held;
+
+    if (s_pad[0] == -2) {
+        const ControlScheme* sc[2];
+        int i;
+        sc[0] = &g_PcConfig.classic;
+        sc[1] = &g_PcConfig.altcam;
+        for (i = 0; i < 2; i++) {
+            s_kb[i]  = SDL_GetScancodeFromName(sc[i]->keyRearLook);
+            s_pad[i] = (sc[i]->padRearLook[0] != '\0') ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padRearLook) : SDL_CONTROLLER_BUTTON_INVALID;
+        }
+    }
+    sch  = g_DebugThirdPersonCam ? 1 : 0;
+    keys = SDL_GetKeyboardState(NULL);
+    held = ((keys && s_kb[sch] != SDL_SCANCODE_UNKNOWN && keys[s_kb[sch]]) ||
+            (s_pad[sch] >= 0 && PsyX_RawControllerButtonHeld(s_pad[sch])));
+
+    /* TPS/OTS only (not FPS, not classic), gameplay only; cleared otherwise so it
+     * can never latch on. */
+    g_PcRearLookActive = (held && g_DebugThirdPersonCam && !g_PcFpsCam &&
+                          g_GameWork.gameState == GameState_InGame &&
+                          g_SysWork.sysState   == SysState_Gameplay &&
+                          !g_PcConsoleInputActive) ? 1 : 0;
 }
 
 /* OTS/TPS free-aim aim assist.

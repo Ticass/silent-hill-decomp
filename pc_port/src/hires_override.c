@@ -16,7 +16,7 @@
 #include "sh_log.h"
 #include "pc_config.h"
 
-#include <PsyX/common/glad.h>
+#include <PsyX/PsyX_render.h>
 
 #define MAX_HIRES_OVERRIDES 256
 
@@ -25,7 +25,7 @@ typedef struct {
     int      vramW, vramH;
     int      clutX, clutY;       /* CLUT cell coords, -1 if no CLUT (16bpp) */
     int      originalBitDepth;   /* 4, 8, 16 */
-    GLuint   glTexture;
+    TextureID glTexture;
     int      hiresW, hiresH;     /* actual pixel dimensions of decoded RGBA */
     int      sourceBitDepth;     /* TIM mode of the loose file itself */
     unsigned packBytes;          /* GL bytes charged to the pack budget (0 = uncounted) */
@@ -35,7 +35,7 @@ static HiresEntry g_entries[MAX_HIRES_OVERRIDES];
 static int        g_numEntries = 0;
 static int        g_initialized = 0;
 
-static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int nearest);
+static int upload_rgba(TextureID* tex, const unsigned char* rgba, int w, int h, int nearest);
 
 /* ---- Texture-pack GL byte budget ------------------------------------------
  * A DuckStation pack composes + uploads a pack-resolution RGBA texture (with
@@ -316,7 +316,7 @@ int HiresOverride_RegisterFromTim(const char* timPath,
         return -1;
     }
 
-    GLuint tex = 0;
+    TextureID tex = 0;
     if (upload_rgba(&tex, rgba, hiW, hiH, 0) != 0)
     {
         free(rgba);
@@ -350,7 +350,7 @@ int HiresOverride_RegisterFromTim(const char* timPath,
  * See hires_override.h for the canonical key encoding. Slot texture content
  * is REPLACED in place when the engine reuses a slot for another TIM. */
 typedef struct {
-    GLuint glTexture[HIRES_POOL_MAX_ROWS]; /* per CLUT row; [0] = base, 0 = empty */
+    TextureID glTexture[HIRES_POOL_MAX_ROWS]; /* per CLUT row; [0] = base, 0 = empty */
     int    nativeW, nativeH; /* disc TIM pixel dims — texelSize denominator so
                               * prim UVs map 0..1 over any replacement size */
     unsigned rowPackBytes[HIRES_POOL_MAX_ROWS]; /* pack-budget charge per row */
@@ -447,7 +447,7 @@ int HiresOverride_PoolSlotRegister(int slotId,
     {
         if (s->glTexture[r] != 0)
         {
-            glDeleteTextures(1, &s->glTexture[r]);
+            GR_DestroyTexture(s->glTexture[r]);
             s->glTexture[r] = 0;
         }
         pack_credit(&s->rowPackBytes[r]);
@@ -471,31 +471,10 @@ int HiresOverride_PoolSlotRegister(int slotId,
  * Upscaled replacements (non-nearest) get mipmaps so they don't shimmer at
  * distance the way a raw LINEAR-sampled 4x texture does; native-res decodes
  * stay NEAREST with no mips (PSX-exact). Returns 0 on success. */
-static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int nearest)
+static int upload_rgba(TextureID* tex, const unsigned char* rgba, int w, int h, int nearest)
 {
     if (rgba == NULL || w <= 0 || h <= 0) return -1;
-    if (*tex == 0)
-    {
-        glGenTextures(1, tex);
-        if (*tex == 0) return -1;
-    }
-    glBindTexture(GL_TEXTURE_2D, *tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    if (!nearest && glGenerateMipmap != NULL)
-    {
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    }
-    else
-    {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
-    }
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return 0;
+    return GR_UploadRGBATexture(tex, rgba, w, h, nearest, !nearest) ? 0 : -1;
 }
 
 int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
@@ -680,7 +659,7 @@ void HiresOverride_PoolSlotsReset(void)
         {
             if (g_poolSlots[i].glTexture[r] != 0)
             {
-                glDeleteTextures(1, &g_poolSlots[i].glTexture[r]);
+                GR_DestroyTexture(g_poolSlots[i].glTexture[r]);
                 g_poolSlots[i].glTexture[r] = 0;
                 if (r == 0) live++;
             }
@@ -710,7 +689,7 @@ void HiresOverride_CharaPoolSlotReset(int slotId)
         {
             if (g_poolSlots[a].glTexture[r] != 0)
             {
-                glDeleteTextures(1, &g_poolSlots[a].glTexture[r]);
+                GR_DestroyTexture(g_poolSlots[a].glTexture[r]);
                 g_poolSlots[a].glTexture[r] = 0;
             }
             pack_credit(&g_poolSlots[a].rowPackBytes[r]);
@@ -746,7 +725,7 @@ void HiresOverride_InvalidateVramRect(int x, int y, int w, int h)
             }
             if (e->glTexture != 0)
             {
-                glDeleteTextures(1, &e->glTexture);
+                GR_DestroyTexture(e->glTexture);
             }
             pack_credit(&e->packBytes);
             g_entries[i] = g_entries[--g_numEntries];
@@ -779,7 +758,7 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
             {
                 PoolSlotEntry* s      = &g_poolSlots[slotId];
                 int            useRow = (s->glTexture[row] != 0) ? row : 0;
-                GLuint         tex    = s->glTexture[useRow];
+                TextureID      tex    = s->glTexture[useRow];
                 /* Chara-range row spill (base+64k): when the alias slot is
                  * empty — a single-palette loose/PNG replacement registered
                  * only rows 0..15 of a >16-row TIM — fall back to the chara

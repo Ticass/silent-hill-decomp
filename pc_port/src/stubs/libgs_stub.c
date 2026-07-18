@@ -14,7 +14,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <SDL.h>
+#include <PsyX/PsyX_render.h>
+#if USE_OPENGL
 #include <PsyX/common/glad.h>
+#endif
 #include "sh_log.h"
 
 /* Screenshot helper - captures back buffer (call before EndScene/swap) */
@@ -23,9 +26,19 @@ void SH_TakeScreenshot(const char* filename)
     extern SDL_Window* g_window;
     int w, h;
     SDL_GetWindowSize(g_window, &w, &h);
+    unsigned char* rgba = (unsigned char*)malloc(w * h * 4);
     unsigned char* px = (unsigned char*)malloc(w * h * 3);
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px);
+    if (!GR_ReadBackbuffer(rgba, w, h)) {
+        free(rgba);
+        free(px);
+        return;
+    }
+    for (int i = 0; i < w * h; ++i) {
+        px[i * 3 + 0] = rgba[i * 4 + 0];
+        px[i * 3 + 1] = rgba[i * 4 + 1];
+        px[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+    free(rgba);
     /* Flip vertically (OpenGL reads bottom-up) */
     unsigned char* flipped = (unsigned char*)malloc(w * h * 3);
     for (int y = 0; y < h; y++) {
@@ -249,8 +262,7 @@ void GsDrawOt(GsOT *ot)
         g_currentOTBucketCount = 1 << ot->length;
         PsyX_ClearGteDepthTable();
 
-        glClearDepth(1.0f);
-        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        GR_ClearDepthStencil();
 #endif
         DrawOTag((u_long*)ot->tag);
     }

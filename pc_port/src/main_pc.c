@@ -35,7 +35,10 @@
 
 /* PsyCross public API */
 #include <PsyX/PsyX_public.h>
+#include <PsyX/PsyX_render.h>
+#if USE_OPENGL
 #include <PsyX/common/glad.h>
+#endif
 
 /* Null device differs by platform: NUL on Windows, /dev/null on POSIX. */
 #ifdef _WIN32
@@ -889,19 +892,19 @@ int main(int argc, char* argv[])
     g_cfg_msaaSamples = g_PcConfig.msaaSamples;
     SH_LOG("MSAA: %dx", g_cfg_msaaSamples);
 
-    /* Initialize PsyCross (creates SDL2 window + OpenGL context) */
-    SH_LOG("Initializing PsyCross (SDL2 + OpenGL)...");
+    /* Initialize PsyCross (creates the SDL2 window + selected renderer). */
+    SH_LOG("Initializing PsyCross renderer...");
     PsyX_Initialise("Silent Hill", windowWidth, windowHeight, g_PcConfig.fullscreen);
 
     SH_LOG("PsyCross initialized. Window: %dx%d", windowWidth, windowHeight);
 
     {
-        const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
-        const char* gl_vendor   = (const char*)glGetString(GL_VENDOR);
-        const char* gl_version  = (const char*)glGetString(GL_VERSION);
-        SH_LOG("GL Renderer: %s", gl_renderer ? gl_renderer : "(null)");
-        SH_LOG("GL Vendor:   %s", gl_vendor   ? gl_vendor   : "(null)");
-        SH_LOG("GL Version:  %s", gl_version  ? gl_version  : "(null)");
+        const char* renderer = GR_GetRendererName();
+        const char* vendor   = GR_GetRendererVendor();
+        const char* version  = GR_GetRendererVersion();
+        SH_LOG("Renderer: %s", renderer ? renderer : "(null)");
+        SH_LOG("Vendor:   %s", vendor   ? vendor   : "(null)");
+        SH_LOG("API:      %s", version  ? version  : "(null)");
     }
 
     /* Apply keyboard/controller bindings + movement/debug options from config

@@ -13,7 +13,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # =============================================================================
 # Options
 # =============================================================================
-option(SH_USE_OPENGL "Use OpenGL renderer (via PsyCross)" ON)
+option(SH_USE_OPENGL "Use the legacy OpenGL renderer instead of Vulkan" OFF)
 option(SH_DEBUG "Enable debug output" OFF)
 option(SH_ASAN "Enable AddressSanitizer for memory corruption detection" OFF)
 
@@ -65,6 +65,10 @@ add_definitions(-DUSE_PGXP=0)
 add_definitions(-DPSYX_SKIP_FRAMEBUFFER_STORE)
 
 set(PSYCROSS_DIR "${CMAKE_SOURCE_DIR}/PsyCross" CACHE PATH "Path to PsyCross")
+
+if(NOT SH_USE_OPENGL)
+    set(PSYX_RENDERER_VULKAN ON CACHE BOOL "Build PsyCross Vulkan renderer" FORCE)
+endif()
 
 if(NOT EXISTS "${PSYCROSS_DIR}/CMakeLists.txt")
     set(PSYCROSS_DIR "${CMAKE_SOURCE_DIR}/../PsyCross")
@@ -212,6 +216,37 @@ add_custom_command(TARGET SilentHillPC POST_BUILD
     COMMENT "Copying shipped runtime assets (pc_port/assets/)"
 )
 
+# A local MinGW build is not runnable unless its shared compiler and media
+# runtimes sit beside SilentHillPC.exe. CI/release packaging already gathers
+# these separately, but the canonical build.bat path previously left a fresh
+# build directory with only the executable and map DLLs. Stage the exact DLLs
+# imported by SilentHillPC (plus libwinpthread, pulled in transitively by the
+# C++ runtime) after every link so build.bat run works from a clean checkout.
+if(MINGW)
+    get_filename_component(SH_MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+    set(SH_MINGW_RUNTIME_DLLS
+        libgcc_s_seh-1.dll
+        libstdc++-6.dll
+        libwinpthread-1.dll
+        libjpeg-8.dll
+        libopenal-1.dll
+        SDL2.dll
+    )
+
+    foreach(SH_RUNTIME_DLL IN LISTS SH_MINGW_RUNTIME_DLLS)
+        set(SH_RUNTIME_DLL_PATH "${SH_MINGW_BIN_DIR}/${SH_RUNTIME_DLL}")
+        if(NOT EXISTS "${SH_RUNTIME_DLL_PATH}")
+            message(FATAL_ERROR
+                "Required MinGW runtime DLL not found: ${SH_RUNTIME_DLL_PATH}")
+        endif()
+        add_custom_command(TARGET SilentHillPC POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SH_RUNTIME_DLL_PATH}" "$<TARGET_FILE_DIR:SilentHillPC>"
+            COMMENT "Copying MinGW runtime ${SH_RUNTIME_DLL}"
+        )
+    endforeach()
+endif()
+
 # Game-specific defines (only on our target, NOT PsyCross)
 target_compile_definitions(SilentHillPC PRIVATE
     VER_${SH_VERSION}
@@ -340,8 +375,11 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(SilentHillPC PRIVATE opengl32 winmm m)
-elseif(UNIX)
+    target_link_libraries(SilentHillPC PRIVATE winmm m)
+    if(SH_USE_OPENGL)
+        target_link_libraries(SilentHillPC PRIVATE opengl32)
+    endif()
+elseif(UNIX AND SH_USE_OPENGL)
     find_package(OpenGL REQUIRED)
     target_link_libraries(SilentHillPC PRIVATE OpenGL::GL)
 endif()

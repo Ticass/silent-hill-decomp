@@ -32,6 +32,8 @@ sh_gdb.txt
 # regenerated, and a fresh clone has no disc image to run the extractor.
 pc_port/build_gen/*
 !pc_port/build_gen/extracted_data/
+pc_port/build-vulkan/
+pc_port/build-vulkan.zip
 
 # FMV tools
 pc_port/tools/mdec_test.exe

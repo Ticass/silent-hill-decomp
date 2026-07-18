@@ -14,6 +14,7 @@
 #include "sh_log.h"
 #include "dbg_overlay.h"
 #include "pc_config.h"
+#include <PsyX/PsyX_render.h>
 
 #include <PsyX/common/glad.h>
 
@@ -565,6 +566,7 @@ static void log_mark(char letter, int idx, VECTOR3* hpos, VECTOR3* cpos)
 
 static void overlay_gl_init(void)
 {
+#if USE_OPENGL
     GLuint vs, fs;
     static const char* vs_src =
         "attribute vec2 a_pos;\n"
@@ -749,6 +751,31 @@ static void overlay_gl_init(void)
         glBindVertexArray(0);
     }
 
+#else
+    static const unsigned char bg[2][2][4] = {
+        { { 0, 0, 0, 205 }, { 0, 0, 0, 205 } },
+        { { 0, 0, 0, 205 }, { 0, 0, 0, 205 } },
+    };
+    static const unsigned char sel[2][2][4] = {
+        { { 90, 130, 220, 110 }, { 90, 130, 220, 110 } },
+        { { 90, 130, 220, 110 }, { 90, 130, 220, 110 } },
+    };
+    unsigned char rgba[32][32][4];
+    int x, y;
+    GR_OverlayUploadRGBA(&s_bg_tex, &bg[0][0][0], 2, 2);
+    GR_OverlayUploadRGBA(&s_sel_tex, &sel[0][0][0], 2, 2);
+    for (y = 0; y < 32; y++) {
+        for (x = 0; x < 32; x++) {
+            unsigned char b = CURSOR_PIX[y][x / 2];
+            unsigned char n = (x & 1) ? (b >> 4) : (b & 0xF);
+            rgba[y][x][0] = CURSOR_PAL[n][0];
+            rgba[y][x][1] = CURSOR_PAL[n][1];
+            rgba[y][x][2] = CURSOR_PAL[n][2];
+            rgba[y][x][3] = CURSOR_PAL[n][3];
+        }
+    }
+    GR_OverlayUploadRGBA(&s_cursor_tex, &rgba[0][0][0], 32, 32);
+#endif
     s_gl_inited = 1;
 }
 
@@ -812,8 +839,12 @@ static void overlay_update_texture(void)
         overlay_render_row(s_vis_rows, prompt);
     }
 
+#if USE_OPENGL
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, TEX_W, TEX_H,
                     GL_RGBA, GL_UNSIGNED_BYTE, s_pixels);
+#else
+    GR_OverlayUploadRGBA(&s_tex, &s_pixels[0][0][0], TEX_W, TEX_H);
+#endif
 }
 
 /* Query the floor-collision function at the player + 4 probe points and format
@@ -941,9 +972,13 @@ static void coll_build_texture(void)
         }
     }
 
+#if USE_OPENGL
     glBindTexture(GL_TEXTURE_2D, s_coll_tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, COLL_TEX_W, COLL_TEX_H,
                     GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#else
+    GR_OverlayUploadRGBA(&s_coll_tex, &pixels[0][0][0], COLL_TEX_W, COLL_TEX_H);
+#endif
 }
 
 /* Fill the anim inspector panel from the player's live model anim state and the
@@ -1008,9 +1043,13 @@ static void anim_build_texture(void)
         }
     }
 
+#if USE_OPENGL
     glBindTexture(GL_TEXTURE_2D, s_anim_tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ANIM_TEX_W, ANIM_TEX_H,
                     GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#else
+    GR_OverlayUploadRGBA(&s_anim_tex, &pixels[0][0][0], ANIM_TEX_W, ANIM_TEX_H);
+#endif
 }
 
 static void score_build_texture(void)
@@ -1037,9 +1076,13 @@ static void score_build_texture(void)
         }
     }
 
+#if USE_OPENGL
     glBindTexture(GL_TEXTURE_2D, s_score_tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCORE_TEX_W, SCORE_TEX_H,
                     GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#else
+    GR_OverlayUploadRGBA(&s_score_tex, &pixels[0][0][0], SCORE_TEX_W, SCORE_TEX_H);
+#endif
 }
 
 /* Build the toast texture from s_toast (line 0 at top), white glyphs, with the
@@ -1071,9 +1114,13 @@ static void toast_build_texture(int alpha)
         }
     }
 
+#if USE_OPENGL
     glBindTexture(GL_TEXTURE_2D, s_toast_tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, TOAST_TEX_W, TOAST_TEX_H,
                     GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#else
+    GR_OverlayUploadRGBA(&s_toast_tex, &pixels[0][0][0], TOAST_TEX_W, TOAST_TEX_H);
+#endif
 }
 
 /* Upload an NDC quad (top y0, bottom y1) for the bound program/VBO and draw it. */
@@ -1082,6 +1129,7 @@ static void toast_build_texture(int alpha)
 static void draw_panel_uv(GLuint tex, float x0, float y0, float x1, float y1,
                           float u1, float v1)
 {
+#if USE_OPENGL
     float verts[6][4];
     verts[0][0] = x0; verts[0][1] = y0; verts[0][2] = 0.0f; verts[0][3] = 0.0f;
     verts[1][0] = x0; verts[1][1] = y1; verts[1][2] = 0.0f; verts[1][3] = v1;
@@ -1093,6 +1141,9 @@ static void draw_panel_uv(GLuint tex, float x0, float y0, float x1, float y1,
     glBindTexture(GL_TEXTURE_2D, tex);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+#else
+    GR_OverlayDrawQuad(tex, x0, y0, x1, y1, 0.0f, 0.0f, u1, v1);
+#endif
 }
 
 static void draw_panel(GLuint tex, float x0, float y0, float x1, float y1)
@@ -1233,12 +1284,16 @@ static void collvis_render_lines(void)
     if (nv == 0)
         return;
 
+#if USE_OPENGL
     glUseProgram(s_line_prog);
     glBindVertexArray(s_line_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_line_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, nv * sizeof(float), verts);
     glLineWidth(2.0f);
     glDrawArrays(GL_LINES, 0, nv / 5);
+#else
+    GR_OverlayDrawLines(verts, nv / 5);
+#endif
 }
 
 void DbgOverlay_PushLine(const char* line)
@@ -1815,6 +1870,10 @@ void DbgOverlay_Update(void)
 
 void DbgOverlay_Render(void)
 {
+    /* Headless renderer smoke-test hook. CI/dev runs can set this environment
+     * variable to exercise texture upload, alpha quads and capture ordering
+     * without synthesizing a global keyboard event. It is inert for players. */
+    static int overlayTestPending = -1;
     GLint   vp[4];
     GLint   prev_prog, prev_tex, prev_vao, prev_vbo, prev_fb;
     GLint   prev_active_tex, prev_blend_src, prev_blend_dst;
@@ -1822,6 +1881,16 @@ void DbgOverlay_Render(void)
     GLboolean prev_depth, prev_blend;
     int     drawConsole, drawColl, drawAnim, drawToast;
     int     toastAlpha = 0;
+
+    if (overlayTestPending < 0)
+        overlayTestPending = getenv("PSYX_OVERLAY_TEST") ? 1 : 0;
+    if (overlayTestPending) {
+        push_console("VULKAN/GL OVERLAY SMOKE TEST");
+        s_console_open = 1;
+        s_console_slide = 1.0f;
+        s_console_dirty = 1;
+        overlayTestPending = 0;
+    }
 
     /* Console is hidden once fully slid off-screen (toggled by `~`); the ring
      * buffer keeps filling while hidden. The collision panel draws whenever it's
@@ -1854,9 +1923,16 @@ void DbgOverlay_Render(void)
 
     if (!drawConsole && !drawColl && !s_coll_on && !drawAnim && !drawToast && !s_score_on) return;
 
+#if USE_OPENGL
     glGetIntegerv(GL_VIEWPORT, vp);
+#else
+    vp[0] = vp[1] = 0;
+    vp[2] = g_windowWidth;
+    vp[3] = g_windowHeight;
+#endif
     if (vp[2] == 0 || vp[3] == 0) return;
 
+#if USE_OPENGL
     /* Save ALL state before making any changes. */
     glGetIntegerv(GL_CURRENT_PROGRAM,      &prev_prog);
     glGetIntegerv(GL_ACTIVE_TEXTURE,       &prev_active_tex);
@@ -1889,6 +1965,10 @@ void DbgOverlay_Render(void)
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+#else
+    if (!s_gl_inited)
+        overlay_gl_init();
+#endif
 
     if (drawConsole) {
         /* Quake-style drop-down: full window width, ~half the window height
@@ -1914,7 +1994,9 @@ void DbgOverlay_Render(void)
         y0 += slideOfs;
         y1 += slideOfs;
 
+#if USE_OPENGL
         glBindTexture(GL_TEXTURE_2D, s_tex);
+#endif
         if (s_console_dirty) {
             overlay_update_texture();
             s_console_dirty = 0;
@@ -2066,6 +2148,7 @@ void DbgOverlay_Render(void)
     }
 
     /* Restore ALL state. */
+#if USE_OPENGL
     glBindFramebuffer(GL_FRAMEBUFFER, prev_fb);
     glBindBuffer(GL_ARRAY_BUFFER, prev_vbo);
     glBindVertexArray(prev_vao);
@@ -2076,6 +2159,7 @@ void DbgOverlay_Render(void)
     glBlendEquationSeparate(prev_blend_eq_rgb, prev_blend_eq_a);
     if (prev_depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (prev_blend) glEnable(GL_BLEND);      else glDisable(GL_BLEND);
+#endif
 }
 
 #endif /* SH_PC_PORT */

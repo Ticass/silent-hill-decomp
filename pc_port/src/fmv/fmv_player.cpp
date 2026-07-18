@@ -20,7 +20,9 @@
 #include <PsyX/PsyX_public.h>
 #include <PsyX/PsyX_render.h>
 #include <PsyX/util/timer.h>
+#if !defined(PSYX_RENDERER_VULKAN)
 #include <PsyX/common/glad.h>
+#endif
 
 #include <psx/libgpu.h>
 #include <psx/libetc.h>
@@ -125,8 +127,10 @@ extern "C" const char* FMV_GetName(int movieIdx)
 }
 extern "C" int FMV_GetFileIdx(int movieIdx) { return FIRST_XA_FILE_IDX + FIRST_MOVIE_TABLE_IDX + movieIdx; }
 
+#if !defined(PSYX_RENDERER_VULKAN)
 /* GL resources */
 static GLuint s_fmvTexture = 0;
+#endif
 
 /* RGB decode buffer, grown on demand to fit the video — no resolution cap.
  * (A fixed 1920x1080 buffer used to overflow the heap on 4K upscale mods.) */
@@ -212,6 +216,7 @@ static int UnpackJPEG(unsigned char* src, unsigned src_len, int* out_w, int* out
     return 0;
 }
 
+#if !defined(PSYX_RENDERER_VULKAN)
 /* Raw GL fullscreen quad - bypasses PsyCross vertex format */
 static GLuint s_fmvVAO = 0;
 static GLuint s_fmvVBO = 0;
@@ -378,6 +383,13 @@ static void DrawVideoFrame(int image_w, int image_h)
 
     SDL_GL_SwapWindow(g_window);
 }
+#else
+static void DrawVideoFrame(int image_w, int image_h)
+{
+    if (!GR_BlitRGB24Frame(s_decodeBuffer, image_w, image_h))
+        printf("[FMV] Vulkan frame presentation failed (%dx%d)\n", image_w, image_h);
+}
+#endif
 
 /* ===== Video codec dispatch =====
  *
@@ -595,6 +607,7 @@ extern "C" void FMV_Init(void)
     if (s_decodeBuffer)
         memset(s_decodeBuffer, 0, s_decodeBufferSize);
 
+#if !defined(PSYX_RENDERER_VULKAN)
     glGenTextures(1, &s_fmvTexture);
     glBindTexture(GL_TEXTURE_2D, s_fmvTexture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -604,6 +617,7 @@ extern "C" void FMV_Init(void)
     glBindTexture(GL_TEXTURE_2D, 0);
 
     InitBlitResources();
+#endif
 }
 
 extern "C" void FMV_Shutdown(void)
@@ -618,6 +632,7 @@ extern "C" void FMV_Shutdown(void)
         s_audioConvBuf = NULL;
         s_audioConvBufSize = 0;
     }
+#if !defined(PSYX_RENDERER_VULKAN)
     if (s_fmvTexture) {
         glDeleteTextures(1, &s_fmvTexture);
         s_fmvTexture = 0;
@@ -634,6 +649,7 @@ extern "C" void FMV_Shutdown(void)
         glDeleteProgram(s_fmvProgram);
         s_fmvProgram = 0;
     }
+#endif
 }
 
 /* ===== XA-ADPCM decoder for FMV audio =====

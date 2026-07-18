@@ -17,10 +17,21 @@ const RECT D_80028A20 = { SCREEN_WIDTH, 256, 192, SCREEN_HEIGHT };
 void func_80066D90(void) // 0x80066D90
 {
     s32       i;
+    s32       frameCount;
     DR_TPAGE* var1; // Guessed type.
     TILE*     var2; // Guessed type.
 
-    for (i = 0; i < 63; i++)
+#ifdef SH_PC_PORT
+    /* PSX spends 63 VBlanks hiding disc access here. PC waits for the queue
+     * explicitly below, so retaining that fixed delay only makes returning
+     * from the map to inventory take over a second. Two draws preserve the
+     * double-buffer refresh without the artificial optical-disc wait. */
+    frameCount = 2;
+#else
+    frameCount = 63;
+#endif
+
+    for (i = 0; i < frameCount; i++)
     {
         var1 = PSX_SCRATCH;
         setDrawTPage(var1, 0, 1, getTPageN(0, 2, 0, 0));

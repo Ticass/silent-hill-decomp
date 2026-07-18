@@ -757,7 +757,14 @@ void SysState_MapScreen_Update(void) // 0x800396D4
             Fs_QueueStartSeek(FILE_TIM_MP_0TOWN_TIM + g_PaperMapFileIdxs[g_SavegamePtr->paperMapIdx]);
 
             ScreenFade_Start(true, false, false);
+#ifdef SH_PC_PORT
+            /* Map access should feel immediate on PC. At the clamped 60 Hz
+             * fade step this reaches black in roughly four frames, while the
+             * file queue below still prevents entering before data is ready. */
+            g_ScreenFadeTimestep = Q12(15.0f);
+#else
             g_ScreenFadeTimestep = Q12(0.0f);
+#endif
             g_SysWork.sysStateSteps[0]++;
         }
 

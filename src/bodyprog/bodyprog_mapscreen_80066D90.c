@@ -234,6 +234,10 @@ void GameState_PaperMapScreen_Update(void) // 0x80066EB0
 
             g_IntervalVBlanks = 1;
             ScreenFade_Start(true, true, false);
+#ifdef SH_PC_PORT
+            /* Match the accelerated gameplay-to-map fade. */
+            g_ScreenFadeTimestep = Q12(15.0f);
+#endif
 
             g_GameWork.gameStateSteps[0] = 2;
             g_SysWork.counters_1C[1]              = 0;
@@ -290,6 +294,10 @@ void GameState_PaperMapScreen_Update(void) // 0x80066EB0
                 else
                 {
                     ScreenFade_Start(true, false, false);
+#ifdef SH_PC_PORT
+                    /* Return to gameplay in roughly four fade-update frames. */
+                    g_ScreenFadeTimestep = Q12(15.0f);
+#endif
                 }
 
                 g_GameWork.gameStateSteps[0] = 4;

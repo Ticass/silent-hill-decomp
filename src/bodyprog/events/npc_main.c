@@ -129,28 +129,6 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
     groupCharaId1 = g_MapOverlayHdr.charaGroupIds[1];
 
 #ifdef SH_PC_PORT
-    /* Spawn diagnostic state. _spawnNearLogged[] holds the last logged
-     * near/far state per slot (1=far, 2=near). On map change we reset it
-     * so the new map's spawns log fresh on first encounter, and we keep
-     * a periodic "closest spawn distance" tick so we can see if the
-     * player is approaching ANY spawn at all over time. */
-    static u8  _spawnNearLogged[64] = { 0 };
-    static s8  _spawnLastMapId      = -1;
-    static u32 _spawnTickCounter    = 0;
-    if (_spawnLastMapId != g_SavegamePtr->mapIdx) {
-        memset(_spawnNearLogged, 0, sizeof(_spawnNearLogged));
-        _spawnLastMapId = g_SavegamePtr->mapIdx;
-        _spawnTickCounter = 0;
-    }
-    /* Tick-throttled "closest spawn" log every ~5s so we can observe player
-     * approach. Computed during the loop below â€” capture nearest distance. */
-    s32 _closestDist  = 0x7FFFFFFF;
-    s32 _closestSlot  = -1;
-    s32 _closestX     = 0;
-    s32 _closestZ     = 0;
-    s8  _closestFlags = 0;
-    int _shouldTickLog = (++_spawnTickCounter % 300 == 0); /* ~5s @60fps */
-
     /* Unlimited-enemies mode: override the map's per-room concurrent cap so
      * natural spawns can fill every npcs[] slot (the console SPAWN command
      * already bypasses the cap). Applied every frame AFTER the map's room-init
@@ -173,14 +151,6 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
         if (g_SysWork.npcFlags == ((1 << g_SysWork.npcFlagsId) - 1)) // TODO: Macro for this check?
 #endif
         {
-#ifdef SH_PC_PORT
-            /* Hit the concurrent-NPC cap. Throttled log so we know if
-             * this is the bottleneck. */
-            static u32 _lastCapLog = 0;
-            if (_spawnTickCounter - _lastCapLog > 300) {
-                _lastCapLog = _spawnTickCounter;
-            }
-#endif
             break;
         }
 
@@ -200,121 +170,14 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
         pos = (VECTOR3*)curCharaSpawn;
 #endif
 
-#ifdef SH_PC_PORT
-        /* Per-spawn diagnostic â€” log non-empty slots when conditions change
-         * (especially when player gets close enough that distance gate
-         * could pass). Logs once per (slot, near/far transition) to avoid
-         * spam while still capturing the moment a spawn would activate. */
-        if (curCharaSpawn->flags != 0) {
-            VECTOR3* pp = &g_SysWork.playerWork.player.position;
-            int gate7 = !Math_Distance2dCheck(pp, pos, Q12(22.0f));
-            /* Track closest non-empty slot for the periodic tick log. */
-            s32 dx = pp->vx - curCharaSpawn->positionX;
-            s32 dz = pp->vz - curCharaSpawn->positionZ;
-            /* Q12 squared-distance â€” keep it as squared to avoid sqrt cost. */
-            s32 distSq = (s32)(((s64)dx * dx + (s64)dz * dz) >> 12);
-            if (distSq < _closestDist) {
-                _closestDist  = distSq;
-                _closestSlot  = i;
-                _closestX     = curCharaSpawn->positionX;
-                _closestZ     = curCharaSpawn->positionZ;
-                _closestFlags = curCharaSpawn->flags;
-            }
-            /* Only re-log on transitions: farâ†’near (gate7 went 0â†’1) or
-             * if first time this slot ever evaluated. */
-            u8 prevState = _spawnNearLogged[i];
-            u8 curState = (gate7 ? 2 : 1); /* 1=far, 2=near */
-            if (prevState != curState) {
-                int gate1 = !(g_SysWork.sysFlags & SysFlag_NoEnemySpawn);
-                int gate2 = HAS_FLAG(ovlEnemiesStatePtr, i) ? 1 : 0;
-                int gate3 = !HAS_FLAG(g_SysWork.field_228C, i) ? 1 : 0;
-                int gate5 = (g_SavegamePtr->gameDifficulty >= curCharaSpawn->gameDifficultyMin);
-                int gate6 = func_8008F914(curCharaSpawn->positionX, curCharaSpawn->positionZ) ? 1 : 0;
-                int gate8 = (!cond || Math_Distance2dCheck(pp, pos, Q12(20.0f)));
-                _spawnNearLogged[i] = curState;
-            }
-        }
-#endif
-
-#ifdef SH_PC_PORT
-        /* Mirror the spawn condition exactly so we can see WHICH gate is
-         * the actual blocker. Diagnoses the case where SPAWN-GATE shows
-         * all gates passing (g1..g8 = 1) but no NPC_SPAWN follows â€” the
-         * difference must be a re-evaluation race, an aliasing issue,
-         * or the npcFlags-full break above the loop. Logs once per slot
-         * per second when the slot looks spawnable. */
-        if (curCharaSpawn->flags != 0) {
-            int dbg_g1 = !(g_SysWork.sysFlags & SysFlag_NoEnemySpawn);
-            int dbg_g2 = HAS_FLAG(ovlEnemiesStatePtr, i) ? 1 : 0;
-            int dbg_g3 = !HAS_FLAG(g_SysWork.field_228C, i) ? 1 : 0;
-            int dbg_g5 = (g_SavegamePtr->gameDifficulty >= curCharaSpawn->gameDifficultyMin);
-            int dbg_g6 = func_8008F914(curCharaSpawn->positionX, curCharaSpawn->positionZ) ? 1 : 0;
-            int dbg_g7 = !Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(22.0f));
-            int dbg_g8 = (!cond || Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(20.0f)));
-            int allPass = dbg_g1 && dbg_g2 && dbg_g3 && dbg_g5 && dbg_g6 && dbg_g7 && dbg_g8;
-            int npcFlagsFull = (g_SysWork.npcFlags == ((1 << g_SysWork.npcFlagsId) - 1));
-            if (allPass) {
-                static u32 _allPassTick[64] = { 0 };
-                if (_allPassTick[i] == 0 || (_spawnTickCounter - _allPassTick[i]) > 60) {
-                    SH_DBG("[SPAWN-FIRE?] slot=%d allPass! npcFlags=0x%x flagsId=%d full=%d vblanks=%d ABOUT TO TRY SPAWN",
-                           i, (unsigned)g_SysWork.npcFlags, (int)g_SysWork.npcFlagsId,
-                           npcFlagsFull, (int)g_VBlanks);
-                    _allPassTick[i] = _spawnTickCounter;
-                }
-            }
-        }
-#endif
-
-#ifdef SH_PC_PORT
-        /* Per-slot post-spawn cooldown. Without it the spawn loop and the
-         * Game_NpcUpdate despawn check (line ~439, despawn at >40u) form
-         * an oscillator on PC: spawn fires while player is <22u, despawn
-         * fires same frame because of how player position evaluates against
-         * the npc->position chain on PC, NPC slot is freed, next frame
-         * spawns again. Repeats thousands of times â†’ eventually corrupts
-         * downstream state and crashes after Player_UpperBodyUpdate.
-         *
-         * Fix: once a slot has spawned, hold off re-spawning it for 60
-         * ticks (~1s @60fps). Enough to break the same-frame oscillator
-         * but short enough to preserve vanilla PSX spawn density â€” the
-         * original 600-tick value was suppressing town enemies way more
-         * than the original game. Despawn still works to clear the slot;
-         * the cooldown just prevents the immediate respawn race. */
-        static u32 _slotSpawnCooldown[64] = { 0 };
-        if (_slotSpawnCooldown[i] > 0) {
-            _slotSpawnCooldown[i]--;
-        }
-        /* Log when cooldown is blocking a slot that otherwise wants to spawn. */
-        if (curCharaSpawn->flags != 0 && _slotSpawnCooldown[i] > 0 &&
-            !HAS_FLAG(g_SysWork.field_228C, i)) {
-            /* Quick mirror of the distance gate to know if cooldown is the
-             * actual blocker (player IS in range but cooldown gates). */
-            int near22 = !Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(22.0f));
-            if (near22) {
-                static u32 _cdLog[64] = { 0 };
-                if (_cdLog[i] == 0 || (_spawnTickCounter - _cdLog[i]) > 60) {
-                    _cdLog[i] = _spawnTickCounter;
-                }
-            }
-        }
-#endif
-
         if (!(g_SysWork.sysFlags & SysFlag_NoEnemySpawn) &&
             HAS_FLAG(ovlEnemiesStatePtr, i) && !HAS_FLAG(g_SysWork.field_228C, i) &&
             curCharaSpawn->flags != 0 &&
             g_SavegamePtr->gameDifficulty >= curCharaSpawn->gameDifficultyMin &&
             func_8008F914(curCharaSpawn->positionX, curCharaSpawn->positionZ) &&
             !Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(22.0f)) &&
-            (!cond || Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(20.0f)))
-#ifdef SH_PC_PORT
-            && _slotSpawnCooldown[i] == 0
-#endif
-            )
+            (!cond || Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(20.0f))))
         {
-#ifdef SH_PC_PORT
-            SH_DBG("[SPAWN-FIRE!] slot=%d gates passed â†’ entering spawn block, npcIdx will be assigned", i);
-            _slotSpawnCooldown[i] = 60;  /* ~1s @60fps -- minimal oscillator guard */
-#endif
             while (HAS_FLAG(&g_SysWork.npcFlags, npcIdx))
             {
                 npcIdx++;
@@ -344,13 +207,6 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
             g_SysWork.npcs[npcIdx].field_40           = i;
             g_SysWork.npcs[npcIdx].model.controlState = 0;
             g_SysWork.npcs[npcIdx].model.stateStep    = curCharaSpawn->flags;
-#ifdef SH_PC_PORT
-            SH_DBG("[SPAWN] slot=%d -> npc[%d] charaId=%d stateStep=%d pos=(%d,%d)",
-                   i, npcIdx, (int)g_SysWork.npcs[npcIdx].model.charaId,
-                   (int)curCharaSpawn->flags,
-                   FP_FROM(curCharaSpawn->positionX, Q12_SHIFT),
-                   FP_FROM(curCharaSpawn->positionZ, Q12_SHIFT));
-#endif
             g_SysWork.npcs[npcIdx].position.vx        = curCharaSpawn->positionX;
             g_SysWork.npcs[npcIdx].position.vz        = curCharaSpawn->positionZ;
 
@@ -367,20 +223,6 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
         }
     }
 
-#ifdef SH_PC_PORT
-    /* Periodic tick log: every ~5 seconds, dump player position and the
-     * closest non-empty spawn slot. Lets us trace whether the player is
-     * actually approaching ANY spawn while wandering, even when no slot
-     * crosses the 22u trigger. Helps diagnose "streets are empty" â€” if
-     * closestDist stays > 22 forever, the player just hasn't walked
-     * close enough yet (or is blocked from doing so). */
-    if (_shouldTickLog && _closestSlot >= 0) {
-        VECTOR3* pp = &g_SysWork.playerWork.player.position;
-        /* _closestDist is squared in Q12 already; rough sqrt for log
-         * readability â€” log it as squared too so we don't pull in
-         * SquareRoot12 from here. */
-    }
-#endif
 }
 
 void Game_NpcUpdate(void) // 0x80038354
@@ -700,63 +542,6 @@ void Game_NpcUpdate(void) // 0x80038354
                                       (s8)npc->model.paletteIdx);
                     }
                     continue;
-                }
-            }
-            /* Reset stateStep only on the first frame after spawn so
-             * Model_AnimStatusSet can fire once.  Don't reset every frame
-             * or anim status transitions (blendâ†’playback) get stuck. */
-            if (npc->model.charaId == Chara_Cheryl)
-            {
-                static bool _cherylInitDone = false;
-                if (!_cherylInitDone) {
-                    npc->model.stateStep = 0;
-                    _cherylInitDone = true;
-                }
-            }
-            /* Same spawn-init pattern for Cybil/AirScreamer: reset stateStep
-             * once on first AI tick so Model_AnimStatusSet fires and the NPC
-             * actually enters its state machine. Without this the NPC appears
-             * loaded but never animates.  Per-slot guard keyed on charaId so
-             * a second spawn after the first dies re-inits.
-             *
-             * NOT applied to GreyChild/Stalker: their AI uses stateStep as
-             * an init-switch selector (stateStep_5 / _6 / _7 etc map to
-             * different StalkerControl_X states).  map0_s00_2.c rewrites
-             * controlState=Uninitialized + stateStep=6 after the corpse
-             * cutscene to make them aggressive; resetting stateStep to 0
-             * here would break that handoff and leave them stuck in the
-             * Init->switch-no-match->Init loop forever. */
-            else if (npc->model.charaId == Chara_Cybil ||
-                     npc->model.charaId == Chara_AirScreamer)
-            {
-                /* Per-slot latch â€” fire ONCE per spawn, not every frame
-                 * the NPC happens to be at controlState==None.
-                 *
-                 * Original code stomped stateStep=0 every frame
-                 * controlState was 0, which broke the cutsceneâ†’combat
-                 * handoff: Air Screamer's intro sets controlState=None
-                 * + stateStep=7 to transition into Control_46 (combat
-                 * dive); the next NpcUpdate would then immediately
-                 * stomp stateStep back to 0, killing the handoff and
-                 * leaving the AS in StandIdle forever. Same family
-                 * also affects Cybil combat in later levels.
-                 *
-                 * Latch resets when the slot is cleared (charaId â†’
-                 * Chara_None on death/despawn) so a respawn re-arms. */
-                static u8 _spawnInitDone[3]   = { 0, 0, 0 };
-                static u8 _lastInitCharaId[3] = { 0xFF, 0xFF, 0xFF };
-                if (k < 3) {
-                    /* Re-arm latch if the slot's charaId changed
-                     * (despawn/respawn cycle, including a new NPC
-                     * occupying the same slot). */
-                    if (npc->model.charaId != _lastInitCharaId[k]) {
-                        _spawnInitDone[k] = 0;
-                        _lastInitCharaId[k] = npc->model.charaId;
-                    }
-                    if (!_spawnInitDone[k] && npc->model.controlState == 0) {
-                        npc->model.stateStep = 0;
-                        _spawnInitDone[k] = 1;
-                    }
                 }
             }
 #endif

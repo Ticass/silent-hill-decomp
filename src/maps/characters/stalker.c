@@ -13,10 +13,6 @@ void Ai_Stalker_Control_8(s_SubCharacter* stalker);  void Ai_Stalker_Control_9(s
 void Ai_Stalker_Control_10(s_SubCharacter* stalker); void Ai_Stalker_Control_11(s_SubCharacter* stalker);
 void Ai_Stalker_Control_12(s_SubCharacter* stalker); void Ai_Stalker_Control_13(s_SubCharacter* stalker);
 #include "maps/characters/stalker.h"
-#ifdef SH_PC_PORT
-#include "sh_log.h"
-#endif
-
 // Forward decls: Stalker_Update calls these before their definitions further down.
 void Ai_Stalker_Init(s_SubCharacter* stalker);
 void Ai_Stalker_ControlUpdate(s_SubCharacter* stalker);
@@ -2206,15 +2202,6 @@ void sharedFunc_800D6970_0_s00(s_SubCharacter* stalker, s_AnmHeader* animHdr, Gs
     Math_MatrixTransform(&stalker->position, &stalker->rotation, coord);
 
     animInfo = &STALKER_ANIM_INFOS[stalker->model.anim.status];
-#ifdef SH_PC_PORT
-    /* Guard against status pointing into an entry whose playbackFunc
-     * is still NULL (un-decompiled stalker anim slots, or NO_VALUE
-     * link leaving status at 0xFF -> OOB into a zeroed entry). Skip
-     * the anim update this frame instead of crashing on NULL call. */
-    if (animInfo->playbackFunc == NULL) {
-        return;
-    }
-#endif
     animInfo->playbackFunc(&stalker->model, animHdr, coord, animInfo);
 
     ptr = PSX_SCRATCH;

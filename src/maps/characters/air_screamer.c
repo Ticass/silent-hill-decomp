@@ -984,53 +984,11 @@ s32 sharedFunc_800D3814_0_s01(s_SubCharacter* airScreamer)
     return dist;
 }
 
-#ifdef SH_PC_PORT
-/* Set by the map0_s01 post-pickup "bird fly-by" event while it owns the Air Screamer
- * (DMS-driven position). Tells Ai_AirScreamer_Control to play the looping wing-flap and
- * skip the normal AI, which would otherwise clobber the flap status back to idle every
- * frame (the AI runs AFTER the event code). 0 everywhere else. */
-int g_PcAsFlybyActive = 0;
-#endif
-
 bool Ai_AirScreamer_Control(s_SubCharacter* airScreamer)
 {
     q20_12 someTime;
     q19_12 deltaTime;
     void (*controlFunc)(s_SubCharacter*);
-
-#ifdef SH_PC_PORT
-    /* PC short-circuit: when the AS is "officially dead" (health ==
-     * NO_VALUE, set by our death fast-track in Control_2), stop
-     * dispatching control funcs entirely. Without this, the death
-     * sequence loops Control_2 -> Control_0 -> Control_46 -> Control_51
-     * -> Control_2 forever â€” each cycle takes a few seconds and the
-     * post-death cutscene trigger only fires after a counter wins the
-     * race. User reports the wait at roughly 2 minutes. Freezing the
-     * AI here lets EventFlag_M0S01_AirScreamerDied (already set by the
-     * map event when health went to NO_VALUE) drive the next scene
-     * immediately. AS body stays at last pose; the cutscene
-     * compositor takes over the camera so it doesn't matter. */
-    if (airScreamer->health == NO_VALUE) {
-        return false;
-    }
-
-    /* map0_s01 fly-by: the event drives position via DMS and the normal AI would
-     * overwrite the wing-flap status with an idle pose each frame. Force the looping
-     * HoverVariable flap and advance it HERE (the last anim write of the frame, after
-     * the event code) so the wings actually flap; skip the AI dispatch. AnimFlag_Unlocked
-     * is required or Anim_TimestepGet returns 0 and the clip never advances. */
-    if (g_PcAsFlybyActive) {
-        u8 _want = ANIM_STATUS(AirScreamerAnim_HoverVariable, true);
-        if (airScreamer->model.anim.status != _want) {
-            airScreamer->model.anim.status      = _want;
-            airScreamer->model.anim.time        = 0;
-            airScreamer->model.anim.keyframeIdx = 0;
-        }
-        airScreamer->model.anim.flags |= AnimFlag_Unlocked;
-        sharedFunc_800D7AB0_0_s01(airScreamer);
-        return true;
-    }
-#endif
 
     deltaTime = g_DeltaTime;
     if (deltaTime < Q12(0.0f))
@@ -11346,15 +11304,6 @@ void sharedFunc_800D598C_0_s01(s_SubCharacter* airScreamer)
     sharedData_800E21D0_0_s01.field_B4[idx3][3] = 0;
     sharedData_800E21D0_0_s01.field_B4[idx3][0] = 1;
 
-#ifdef SH_PC_PORT
-    {
-        static int _598Cpost = 0;
-        if (_598Cpost < 12) {
-            _598Cpost++;
-        }
-    }
-#endif
-
     element4 = ptr->field_380[idx2][0];
     element5 = ptr->field_380[idx2][1];
 
@@ -12065,25 +12014,6 @@ bool sharedFunc_800D5F00_0_s01(s_SubCharacter* const airScreamer)
     {
         return true;
     }
-
-#ifdef SH_PC_PORT
-    /* High-FPS death-freeze fix. Reaching here means every velocity gate above
-     * passed: the Air Screamer is already MOTIONLESS. The remaining work is a
-     * dt-scaled slide toward flatter neighbouring ground (var_s6 found a higher
-     * cell). At high frame rates that per-frame nudge (g_DeltaTime * 0.5) is
-     * sub-unit and lost to collision quantization, so a downed screamer that
-     * settled on a micro-ledge never clears it and this returns false forever ->
-     * the kill gate in Ai_AirScreamer_Control_2 (anim==Stun-active && temp_s3)
-     * never fires; it hangs downed-but-alive (radio on, no blood, unshootable)
-     * until a coarse step (pause/unpause, capped at 1/30) lands the slide. The
-     * only consumer of this result is that kill gate, used only when health<=0, so
-     * when downed treat the stationary screamer as settled and let it die where it
-     * rests. Living-AS movement (health>0) is untouched. */
-    if (airScreamer->health <= Q12(0.0f))
-    {
-        return true;
-    }
-#endif
 
     sharedData_800E21D0_0_s01.flags_0 |= 0x20000000;
     var_s4                             = Q12_MULT_PRECISE(g_DeltaTime, Q12(0.5f));

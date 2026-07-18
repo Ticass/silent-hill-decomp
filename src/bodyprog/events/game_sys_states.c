@@ -261,6 +261,21 @@ void GameState_InGame_Update(void) // 0x80038BD4
         player = &g_SysWork.playerWork.player;
         Player_Update(player, FS_BUFFER_0, g_SysWork.playerBoneCoords);
 
+#ifdef SH_PC_PORT
+        /* Player_Update has finished writing this frame's local bone transforms.
+         * Invalidate the cached hierarchy now, before flashlight/flame effects
+         * query the hand and torso matrices below.  Doing this only immediately
+         * before drawing Harry left those effects one pose behind after a map
+         * transition: Harry rendered from the new hierarchy while his light was
+         * still transformed by the cached pre-transition workm matrices. */
+        {
+            int _bi;
+            for (_bi = 0; _bi < HarryBone_Count; _bi++) {
+                g_SysWork.playerBoneCoords[_bi].flg = 0;
+            }
+        }
+#endif
+
         Demo_DemoRandSeedRestore();
         Gfx_FlashlightUpdate();
 
@@ -290,15 +305,6 @@ void GameState_InGame_Update(void) // 0x80038BD4
              * it re-showed ALL of Harry's hidden weapon-hand variant meshes
              * every frame (the "duplicate hands inside his hand" report). */
 
-            /* Reset bone-coord flg values so the matrix hierarchy gets
-             * fully recomputed this frame. Stale cached workm matrices
-             * cause Harry's model to alternate-frame shrink/collapse. */
-            {
-                int _bi;
-                for (_bi = 0; _bi < HarryBone_Count; _bi++) {
-                    g_SysWork.playerBoneCoords[_bi].flg = 0;
-                }
-            }
             /* Harry now renders WITH fog, matching PSX (he previously
              * rendered unfogged via a temporary isFogEnabled=0 wrap here).
              * The corruption that wrap hid was the s16 per-vertex depth

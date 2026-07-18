@@ -6,10 +6,6 @@
 #include "maps/shared.h"
 #include "maps/characters/puppet_nurse.h"
 
-#ifdef SH_PC_PORT
-#include "sh_log.h"
-#endif
-
 // TODO:
 // - Make this separate split in each map that uses it, instead of `#include`
 // - Move funcdecls/structs for these out of shared.h header.
@@ -191,18 +187,6 @@ void PuppetNurse_SfxPlay(s_SubCharacter* nurse, s32 idx)
 
     sfxPair = g_NursePuppetSfxs;
     idx0    = (nurseProps.field_124->idx_1C * 9) + idx;
-#ifdef SH_PC_PORT
-    /* Diagnose the "wrong/loud nurse damage sound": if this logs a tight
-     * burst of lines (call# jumping several per knife hit) the hurt SFX is
-     * machine-gunning (high-FPS retrigger). If it logs once per hit with the
-     * expected sfxId, the sample/playback itself is the issue. */
-    {
-        static s32 s_nurseSfxCall = 0;
-        SH_DBG("[NURSESFX] call=%d idx=%d idx_1C=%d idx0=%d sfxId=%d vol=%d dt=%d",
-               s_nurseSfxCall++, idx, (s32)nurseProps.field_124->idx_1C, idx0,
-               (s32)sfxPair[idx0].sfxId, (s32)sfxPair[idx0].vol, (s32)g_DeltaTime);
-    }
-#endif
     Sfx_WithFlagsPlay(sfxPair[idx0].sfxId, &nurse->position, sfxPair[idx0].vol, SfxFlag_None);
 }
 
@@ -331,26 +315,7 @@ void PuppetNurse_Init(s_SubCharacter* nurse, bool isDoctor)
 void PuppetNurse_Update(s_SubCharacter* nurse, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords)
 {
     // Initialize.
-#ifdef SH_PC_PORT
-    /* field_124 (the per-variant instance ptr) is set only by PuppetNurse_Init
-     * to &sharedData_800D5710_3_s03[charStatIdx], whose animInfo_24 is always
-     * non-NULL (PuppetNurseData_Init fills all 4 entries). The nurse crashes in
-     * map7_s01 when its npc slot is reused with STALE state: a leftover non-zero
-     * model.controlState + a leftover non-NULL field_124 that does NOT point at
-     * sharedData (its +0x28 happens to read 0). The original guard only forced
-     * Init on `controlState==0 || field_124==NULL`, so a stale non-NULL field_124
-     * slipped through -> Init skipped -> PuppetNurse_AnimUpdate deref'd
-     * animInfoBase = field_124->animInfo_24 = 0 -> playbackFunc read AV at 0x2c0
-     * (Stone-of-Time nurse, stateStep 27 -> charStatIdx 3). Also force Init when
-     * field_124->animInfo_24 is NULL: that uniquely flags "field_124 is stale /
-     * not a real instance ptr", and re-Init restores it from the intact
-     * model.stateStep. (field_124==NULL short-circuits before the deref.) */
-    if (nurse->model.controlState == 0 ||
-        nurse->properties.puppetNurse.field_124 == NULL ||
-        nurse->properties.puppetNurse.field_124->animInfo_24 == NULL)
-#else
     if (nurse->model.controlState == 0)
-#endif
     {
         PuppetNurse_Init(nurse, false);
     }
@@ -361,14 +326,7 @@ void PuppetNurse_Update(s_SubCharacter* nurse, s_AnmHeader* anmHdr, GsCOORDINATE
 void PuppetDoctor_Update(s_SubCharacter* doctor, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords)
 {
     // Initialize.
-#ifdef SH_PC_PORT
-    /* Same stale-slot guard as PuppetNurse_Update above (shared instance data). */
-    if (doctor->model.controlState == 0 ||
-        doctor->properties.puppetNurse.field_124 == NULL ||
-        doctor->properties.puppetNurse.field_124->animInfo_24 == NULL)
-#else
     if (doctor->model.controlState == 0)
-#endif
     {
         PuppetNurse_Init(doctor, true);
     }

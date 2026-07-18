@@ -5,10 +5,6 @@
 #include "main/rng.h"
 #include "maps/shared.h"
 #include "maps/characters/groaner.h"
-#ifdef SH_PC_PORT
-#include "sh_log.h"
-#endif
-
 #define groanerProps groaner->properties.groaner
 
 // @hack Needed to fix mismatch in `sharedFunc_800E39D8_2_s00`.
@@ -20,18 +16,6 @@
 void Groaner_Update(s_SubCharacter* groaner, s_AnmHeader* anmHdr, GsCOORDINATE2* coords)
 {
     u8 prevControlState;
-
-#ifdef SH_PC_PORT
-    /* The dispatch table sharedData_800EEE14_2_s00 and the per-keyframe
-     * data tables are now populated by pc_port/src/groaner_rodata.c
-     * (extracted from disc_extract/VIN/MAP2_S00.BIN). AI re-enabled —
-     * if a Groaner crash recurs, capture a fresh dump for the next
-     * call site we missed. */
-    static int s_loggedOn = 0;
-    if (!s_loggedOn) {
-        s_loggedOn = 1;
-    }
-#endif
 
     // Initialize.
     if (groaner->model.controlState == 0)
@@ -349,31 +333,6 @@ void sharedFunc_800E384C_2_s00(s_SubCharacter* groaner)
     s32 _gIdx = getIndex();
     #undef getIndex
     #define getIndex() (_gIdx)
-#endif
-
-#ifdef SH_PC_PORT
-    /* [GROANER] wake probe: lying dogs ("playing dead") reportedly never
-     * wake. Log the two alert gates once per second for the nearest
-     * Flag_5 dog so a street log shows which gate fails (hearing =
-     * noise*coef - dist via func_80070360; sound query = func_8006FD90). */
-    if (groanerProps.flags.val16[0] & GroanerFlag_5)
-    {
-        static int s_wakeLogTick = 0;
-        s32 _dist = Math_Vector2MagCalcSafeQ6(g_SysWork.playerWork.player.position.vx - groaner->position.vx,
-                                        g_SysWork.playerWork.player.position.vz - groaner->position.vz);
-        if (_dist < Q12(8.0f) && ++s_wakeLogTick >= 60)
-        {
-            s_wakeLogTick = 0;
-            SH_DBG("[GROANER] lying dist=%.2f noise=%d hear=%d losq=%d flags=0x%X anim=%d ctl=%d",
-                   (double)_dist / 4096.0,
-                   (int)g_SysWork.playerWork.player.properties.player.field_10C,
-                   (int)func_80070360(groaner, _dist, UNK_VAL),
-                   (int)func_8006FD90(groaner, 1, sharedData_800EEE3C_2_s00[getIndex()].field_0, sharedData_800EEE3C_2_s00[getIndex()].field_4),
-                   (unsigned)groanerProps.flags.val16[0],
-                   (int)groaner->model.anim.status,
-                   (int)groaner->model.controlState);
-        }
-    }
 #endif
 
     if (func_80070360(groaner, Math_Vector2MagCalcSafeQ6(g_SysWork.playerWork.player.position.vx - groaner->position.vx,
@@ -1067,7 +1026,7 @@ void sharedFunc_800E55B0_2_s00(s_SubCharacter* groaner)
 void sharedFunc_800E5930_2_s00(s_SubCharacter* groaner)
 {
     s32 newAnimStatus;
-    u32 animStatus;
+    u32 animIdx;
 
     if (!(groanerProps.flags.val16[0] & GroanerFlag_1))
     {
@@ -1086,17 +1045,18 @@ void sharedFunc_800E5930_2_s00(s_SubCharacter* groaner)
     if (!(groanerProps.flags.val32 & (GroanerFlag_Airborne | GroanerFlag_6)) &&
         groaner->moveSpeed == Q12(0.0f))
     {
-        animStatus    = ANIM_STATUS_IDX_GET(groaner->model.anim.status);
+        animIdx       = ANIM_STATUS_IDX_GET(groaner->model.anim.status);
         newAnimStatus = ANIM_STATUS(GroanerAnim_Still, false);
-        if (animStatus == ANIM_STATUS(GroanerAnim_StandIdle, false))
+
+        if (animIdx == GroanerAnim_StunFromJumpDeathEnd)
         {
             newAnimStatus = ANIM_STATUS(GroanerAnim_StandRecoilFront, true);
         }
-        if (animStatus == ANIM_STATUS(GroanerAnim_StandIdle, true))
+        if (animIdx == GroanerAnim_StunFromStandRightDeathEnd)
         {
             newAnimStatus = ANIM_STATUS(GroanerAnim_JumpToStun, false);
         }
-        if (animStatus == ANIM_STATUS(GroanerAnim_JumpAttack, false))
+        if (animIdx == GroanerAnim_StunFromStandLeftDeathEnd)
         {
             newAnimStatus = ANIM_STATUS(GroanerAnim_JumpToStun, true);
         }

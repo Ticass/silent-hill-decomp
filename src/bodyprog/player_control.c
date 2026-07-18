@@ -7249,7 +7249,19 @@ void Player_LowerBodyUpdate(s_SubCharacter* player, s_PlayerExtra* extra) // 0x8
                             }
                             // Set stumble anim if crashed into a wall.
                             else if (player->properties.player.runStepSfxCount >= 5 &&
-                                     playerProps.moveSpeed >= Q12(3.125f))
+                                     playerProps.moveSpeed >= Q12(3.125f)
+#ifdef SH_PC_PORT
+                                     /* The original path assumes losing forward input at
+                                      * full speed means a wall impact. On PC a transient
+                                      * input/preload gap can satisfy that assumption while
+                                      * Harry is still covering his full step, producing the
+                                      * remaining open-ground "invisible wall" stop. Match the
+                                      * guarded anticipation path above: only select the wall-
+                                      * stop animation when collision reduced actual travel to
+                                      * less than half of this frame's intended movement. */
+                                     && travelDistStep < (g_Player_LastMoveStep >> 1)
+#endif
+                                     )
                             {
                                 if (player->model.anim.keyframeIdx >= 33 &&
                                     player->model.anim.keyframeIdx <= 34)

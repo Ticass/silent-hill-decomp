@@ -717,16 +717,6 @@ void SplitHead_Control_4(s_SubCharacter* splitHead)
             timer1      = sharedData_800D5880_1_s05;
             timer1_div6 = timer1 / 6;
 
-#ifdef SH_PC_PORT
-            /* sharedData_800D5880_1_s05 is BSS-zero until the first roar
-             * cycle sets it (Q12(3.8f)); timer1_div6 == 0 then faults the
-             * x86 idiv below. Mid-volume matches the vanilla else-branch. */
-            if (timer1_div6 == 0)
-            {
-                vol = Q8(0.5f);
-            }
-            else
-#endif
             if (timer0 < timer1_div6)
             {
                 vol = (timer0 << 7) / timer1_div6;

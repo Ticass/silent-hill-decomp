@@ -1093,7 +1093,6 @@ void Map_WorldObjectsUpdate(void) // 0x800DCCF4
             if (!_wouBirdSkipLogged) {
                 _wouBirdSkipLogged = 1;
             }
-            { extern int g_PcAsFlybyActive; g_PcAsFlybyActive = 0; }
             Savegame_EventFlagSet(EventFlag_42);
         }
         else
@@ -1101,18 +1100,6 @@ void Map_WorldObjectsUpdate(void) // 0x800DCCF4
 #endif
         if (Savegame_EventFlagGet(EventFlag_41))
         {
-#ifdef SH_PC_PORT
-            /* Flag the fly-by so Ai_AirScreamer_Control (which runs AFTER this event code
-             * each frame, via Game_NpcUpdate) plays the looping HoverVariable wing-flap +
-             * AnimFlag_Unlocked and skips the AI that would otherwise clobber the flap
-             * status back to idle. Position/rotation stay DMS-driven below. Setting the
-             * flap status here would just be overwritten by the AI; doing it in the AS
-             * update (the last anim write of the frame) is why the wings now actually flap. */
-            {
-                extern int g_PcAsFlybyActive;
-                g_PcAsFlybyActive = 1;
-            }
-#endif
             temp_a1 = g_Cutscene_Timer + Q12_MULT_PRECISE(g_DeltaTime, Model_AnimDurationGet(&airScreamerChara.model));
 
             ptr = &g_Cutscene_Timer;
@@ -1135,9 +1122,6 @@ void Map_WorldObjectsUpdate(void) // 0x800DCCF4
             {
                 Savegame_EventFlagSet(EventFlag_42);
                 vcReturnPreAutoCamWork(true);
-#ifdef SH_PC_PORT
-                { extern int g_PcAsFlybyActive; g_PcAsFlybyActive = 0; }
-#endif
                 airScreamerChara.position.vy = Q12(-10.0f);
                 airScreamerChara.position.vz = Q12(280.0f);
             }

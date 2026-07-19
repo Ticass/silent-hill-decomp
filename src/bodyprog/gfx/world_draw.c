@@ -228,30 +228,12 @@ void Ipd_PlayerChunkInit(s_MapOverlayHdr* mapHdr, s32 playerPosX, s32 playerPosZ
         activeIpdCount = 4;
     }
 #ifdef SH_PC_PORT
-    /* Bump active chunk count on PC. Original game used 1-2 chunks for
-     * interior rooms because PSX 4:3 view fit the entire room within
-     * those cells. With Hor+ widescreen + pixel-aspect compensation
-     * (PsyCross 9c502de) the visible horizontal extent is ~1.46x PSX,
-     * so chunks adjacent to the player's cell now appear at the screen
-     * edges and need to stay resident. User reported edge geometry
-     * disappearing as they turn (chunks not loaded fast enough to
-     * cover the wider view). Confirmed via [IPD] ChunkCheckDraw log:
-     * `total=256 loaded=2` regardless of room size.
-     *
-     * Floor at 4 covers the worst-case 1.46x extent in any rotation
-     * (player at corner of 2x2 cells, view extending into 1 more on
-     * each side). Map slot count maxes at PC_MAX_IPD_CHUNKS=256 so
-     * upping the count costs ~50KB/chunk extra RAM at most.
-     *
-     * Interiors get 16: Map_ChunkLoad now loads the full +-2 X / +-1 Z
-     * window that Ipd_CellPositionMatchCheck draws (15 cells), so the
-     * window must fit in slots without evicting itself. With only 4
-     * slots the hospital cycled rooms through the same slots every
-     * door/cell crossing: the +-2 draw window then showed stale
-     * residents (other rooms/floors) while the player's own cell was
-     * still mid-load — floating neighbor rooms, void where the current
-     * room should be, popping floor patches, and no collision for
-     * visible-but-unloaded neighbors. */
+    /* Keep a generous resident cache on PC. Interior rendering and loading
+     * both use the player's exact cell, matching retail, so these extra
+     * slots are a cache for recently visited rooms rather than permission
+     * to stream or draw neighboring room islands. This avoids needless
+     * slot recycling at ordinary door transitions while preserving the
+     * synchronous-load stability gained by the larger PC allocation. */
     if (flags & MapFlag_Interior) {
         activeIpdCount = 16;
     } else if (activeIpdCount < 4) {

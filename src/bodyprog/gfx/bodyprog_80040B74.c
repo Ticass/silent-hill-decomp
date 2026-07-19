@@ -1540,14 +1540,16 @@ s32 Map_ChunkLoad(s_MapTerrain* map, q19_12 posX0, q19_12 posZ0, q19_12 posX1, q
 
     {
 #ifdef SH_PC_PORT
-    /* Interiors must LOAD the same +-2 X / +-1 Z window that
-     * Ipd_CellPositionMatchCheck DRAWS. Vanilla loaded only the center
-     * cell because the exact-cell match never drew anything else; the PC
-     * widened draw window without a widened load window showed stale
-     * resident chunks (other rooms/floors) and left visible neighbors
-     * with no geometry or collision until walked into. */
-    s32 scanMin = g_DebugCamEnabled ? -4 : (map->isExterior ? -1 : -2);
-    s32 scanMax = g_DebugCamEnabled ? 5 : (map->isExterior ? 1 : 2);
+    /* Interior rooms are self-contained cell islands and
+     * Ipd_CellPositionMatchCheck draws only the player's exact cell. Keep
+     * loading on that same retail boundary. The obsolete +-2 X / +-1 Z
+     * window streamed as many as 15 unrelated rooms at every transition;
+     * besides wasting work, that repeatedly recycled IPD slots and could
+     * leave stale/corrupt geometry after an exterior-interior round trip.
+     * Exteriors retain their vanilla 3x3 neighborhood, while debug camera
+     * mode deliberately keeps its wider inspection window. */
+    s32 scanMin = g_DebugCamEnabled ? -4 : (map->isExterior ? -1 : 0);
+    s32 scanMax = g_DebugCamEnabled ? 5 : (map->isExterior ? 1 : 0);
     s32 loadsThisFrame = 0;
     s32 maxLoadsPerFrame = g_DebugCamEnabled ? 2 : 9;
 #else
@@ -1559,7 +1561,7 @@ s32 Map_ChunkLoad(s_MapTerrain* map, q19_12 posX0, q19_12 posZ0, q19_12 posX1, q
         for (x = scanMin; x <= scanMax; x++)
         {
 #ifdef SH_PC_PORT
-            if (g_DebugCamEnabled || map->isExterior || (z >= -1 && z <= 1))
+            if (g_DebugCamEnabled || map->isExterior || (x == 0 && z == 0))
 #else
             if (map->isExterior || (x == 0 && z == 0))
 #endif
@@ -1570,9 +1572,7 @@ s32 Map_ChunkLoad(s_MapTerrain* map, q19_12 posX0, q19_12 posZ0, q19_12 posX1, q
                 chunkIdx = Map_IpdIdxGet(projCellX, projCellZ);
                 if (chunkIdx != NO_VALUE &&
 #ifdef SH_PC_PORT
-                    /* Interior neighbor cells are by definition outside the
-                     * player's cell (distance > 0); the window itself is the
-                     * load gate. */
+                    /* The exact-cell scan is the interior load gate. */
                     (g_DebugCamEnabled || !map->isExterior || Ipd_PaddedDistanceToEdgeGet(posX0, posZ0, projCellX, projCellZ, map->isExterior) <= Q12(0.0f)) &&
 #else
                     Ipd_PaddedDistanceToEdgeGet(posX0, posZ0, projCellX, projCellZ, map->isExterior) <= Q12(0.0f) &&

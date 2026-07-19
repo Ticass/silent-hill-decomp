@@ -347,8 +347,20 @@ bool Screen_BackgroundMotionBlur(s32 vBlanks) // 0x80031CCC
             else
             {
                 offsetY      = -112;
+#ifdef SH_PC_PORT
+                /* PsyCross deliberately renders both emulated display buffers
+                 * into the single VRAM framebuffer at (0, 0). The retail code
+                 * below alternates between the PS1 pages at Y=32 and Y=256;
+                 * on PC the Y=256 phase therefore sampled no stored frame and
+                 * reset the loading-screen afterimage every other tick. Feed
+                 * back from the real PC framebuffer each tick so successive
+                 * running poses accumulate and fade as intended. */
+                texOffsetY   = 0;
+                tPageOffsetY = 0;
+#else
                 texOffsetY   = (g_ActiveBufferIdx == 0) << 5;
                 tPageOffsetY = g_ActiveBufferIdx << 8;
+#endif
             }
 
 #ifdef SH_PC_PORT

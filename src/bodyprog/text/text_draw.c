@@ -1224,7 +1224,7 @@ void Gfx_StringDrawInt(s32 widthMin, s32 val) // 0x8004B9F8
     while (val >= ATLAS_COLUMN_COUNT)
     {
         str--;
-        quotient = (val / ATLAS_COLUMN_COUNT) >> 32;
+        quotient = val / ATLAS_COLUMN_COUNT;
         *str     = (val - (quotient * ATLAS_COLUMN_COUNT)) + '0';
 
         if (widthMin > 0)

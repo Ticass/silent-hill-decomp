@@ -47,6 +47,35 @@
 #define SH_NULL_DEVICE "/dev/null"
 #endif
 
+#ifdef _WIN32
+/* Map overlay DLLs import the executable's exported game symbols by the
+ * canonical module name "SilentHillPC.exe".  If the executable is renamed,
+ * Windows loads a second SilentHillPC.exe beside it to satisfy that import;
+ * the two copies then have separate game globals and the first map transition
+ * crashes.  Refuse that unsupported layout before any overlay can be loaded. */
+static int Pc_ExecutableNameIsCanonical(void)
+{
+    char        path[1024];
+    const char* name;
+    extern __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);
+
+    if (GetModuleFileNameA(NULL, path, sizeof(path)) == 0)
+        return 1;
+
+    path[sizeof(path) - 1] = '\0';
+    name = strrchr(path, '\\');
+    name = (name != NULL) ? name + 1 : path;
+    if (_stricmp(name, "SilentHillPC.exe") == 0)
+        return 1;
+
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                             "Silent Hill - invalid executable name",
+                             "This build must be named SilentHillPC.exe. Renaming it causes map DLLs to load a second copy of the game and crash.",
+                             NULL);
+    return 0;
+}
+#endif
+
 /* Forward declarations from game code */
 extern void MainLoop(void);
 extern void Fs_QueueInitialize(void);
@@ -670,6 +699,11 @@ static void ParseArgs(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    if (!Pc_ExecutableNameIsCanonical())
+        return EXIT_FAILURE;
+#endif
+
     /* Log file is NOT opened until after config load. SH_DBG calls before
      * that point are silently no-ops (the macro short-circuits on a NULL
      * handle). Avoids creating SilentHill.log when enable_debug_log=0. */

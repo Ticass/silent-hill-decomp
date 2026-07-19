@@ -892,6 +892,12 @@ int main(int argc, char* argv[])
     g_cfg_msaaSamples = g_PcConfig.msaaSamples;
     SH_LOG("MSAA: %dx", g_cfg_msaaSamples);
 
+    /* RT features must be requested before Vulkan creates its logical device.
+     * The backend still enables the capability opportunistically so this flag
+     * can be toggled live, but it controls whether the future RTGI pass runs. */
+    g_cfg_rtgi = g_PcConfig.rtgi ? 1 : 0;
+    SH_LOG("Hardware RTGI request: %s", g_cfg_rtgi ? "on" : "off");
+
     /* Initialize PsyCross (creates the SDL2 window + selected renderer). */
     SH_LOG("Initializing PsyCross renderer...");
     PsyX_Initialise("Silent Hill", windowWidth, windowHeight, g_PcConfig.fullscreen);
@@ -905,6 +911,7 @@ int main(int argc, char* argv[])
         SH_LOG("Renderer: %s", renderer ? renderer : "(null)");
         SH_LOG("Vendor:   %s", vendor   ? vendor   : "(null)");
         SH_LOG("API:      %s", version  ? version  : "(null)");
+        SH_LOG("Hardware RT foundation: %s", GR_RayTracingStatus());
     }
 
     /* Apply keyboard/controller bindings + movement/debug options from config

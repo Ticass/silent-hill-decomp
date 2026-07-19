@@ -43,6 +43,11 @@
 #include <string.h>
 #include <ctype.h>
 
+extern int g_cfg_rtgi;
+extern int GR_RayTracingAvailable(void);
+extern int GR_RayTracingEnabled(void);
+extern const char* GR_RayTracingStatus(void);
+
 /* fmv_player.cpp */
 extern int         FMV_Play(int file_idx, int max_frames);
 extern int         FMV_GetCount(void);
@@ -373,6 +378,7 @@ static const char* const HELP_LINES[] = {
     " invcary <n>    carousel item Y offset (+down)",
     " inveqy <n>     equipped item Y offset (+down)",
     " invdim <pct>   off-center carousel dim strength",
+    " rtgi [0|1]     hardware RT foundation status/toggle",
     " fmv            list movies (numbered)",
     " fmv <name|#>   play a movie (also intro1-2, end1-5)",
     " kf [n]         keyframe inspector: set/show frame (K key)",
@@ -1096,6 +1102,23 @@ void Pc_ConsoleExec(const char* line)
         g_PcConfig.usePgxp = g_PsxUsePgxp ? 1 : 0;
         PcConfig_SaveKeyValue("use_pgxp", g_PsxUsePgxp ? "1" : "0");
         cprintf("PGXP %s (perspective-correct, WIP)", g_PsxUsePgxp ? "ON" : "OFF");
+    } else if (strcmp(cmd, "RTGI") == 0) {
+        int requested = g_cfg_rtgi;
+        if (arg[0] == '1' && arg[1] == '\0') requested = 1;
+        else if (arg[0] == '0' && arg[1] == '\0') requested = 0;
+        else if (arg[0] != '\0' && strcmp(arg, "STATUS") != 0) {
+            cprintf("usage: rtgi [0|1|status]");
+            return;
+        }
+        g_cfg_rtgi = requested;
+        g_PcConfig.rtgi = requested;
+        if (arg[0] == '0' || arg[0] == '1')
+            PcConfig_SaveKeyValue("rtgi", requested ? "1" : "0");
+        cprintf("RT foundation: %s", GR_RayTracingStatus());
+        cprintf("RTGI requested=%s, hardware=%s, pass=%s",
+                requested ? "ON" : "off",
+                GR_RayTracingAvailable() ? "ready" : "unavailable",
+                GR_RayTracingEnabled() ? "armed (not implemented)" : "off");
     } else if (strcmp(cmd, "FLMODE") == 0) {
         /* flmode 0..3 | classic | classicshadows | modern | modernshadows */
         int mode = g_PcConfig.flashlightMode;

@@ -30,6 +30,7 @@ s_PcConfig g_PcConfig = {
     .wholeMapExteriors = 0, /* EXPERIMENTAL: texture+draw every exterior chunk (whole town visible; heavy with fog weakened) */
     .usePgxp        = 0, /* 0=affine textures (PSX look), 1=PGXP perspective correct (WIP) */
     .msaaSamples    = 0, /* 0=off, 2/4/8 = MSAA sample count */
+    .rtgi           = 0, /* hardware RT foundation; requires Vulkan ray-query support */
     .postProcess    = 0, /* 0=off, 1.. = post-process look */
     .tonemap        = 0, /* 0=off, 1=Reinhard, 2=ACES, 3=Filmic */
     .flashlightMode = 0, /* 0=Classic (PSX), 1=Classic+Shadows, 2=Modern, 3=Modern+Shadows */
@@ -484,6 +485,10 @@ void PcConfig_Load(const char* path)
             else             v = 0;
             g_PcConfig.msaaSamples = v;
         }
+        else if (strcmp(key, "rtgi") == 0)
+        {
+            g_PcConfig.rtgi = (atoi(value) != 0);
+        }
         else if (strcmp(key, "post_process") == 0)
         {
             int v = atoi(value);
@@ -904,4 +909,3 @@ void PcConfig_SaveMapName(const char* mapName)
         return;
     PcConfig_SaveKeyValue("map", mapName);
 }
-

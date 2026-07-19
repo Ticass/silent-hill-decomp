@@ -78,6 +78,7 @@ typedef struct {
                             * resident_textures. (config key: whole_map_exteriors) */
     int usePgxp;         /* 1 = enable PGXP precision/perspective-correct textures (work-in-progress) */
     int msaaSamples;     /* MSAA on the default framebuffer: 0 = off, 2/4/8 = sample count (config key: msaa) */
+    int rtgi;            /* request Vulkan hardware ray-tracing foundation (config key: rtgi) */
     int postProcess;     /* full-screen post-process look: 0 = off, 1.. = built-in filter (config key: post_process) */
     int tonemap;         /* tone-map operator: 0=off,1=Reinhard,2=ACES,3=Filmic (config key: tonemap) */
     int flashlightMode;     /* THE flashlight setting (config key: flashlight_mode):
@@ -216,4 +217,3 @@ void PcConfig_SaveKeyValue(const char* key, const char* value);
 void PcConfig_ApplyXaVolume(float norm);
 
 #endif /* PC_CONFIG_H */
-

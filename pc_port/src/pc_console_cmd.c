@@ -1118,7 +1118,7 @@ void Pc_ConsoleExec(const char* line)
         cprintf("RTGI requested=%s, hardware=%s, pass=%s",
                 requested ? "ON" : "off",
                 GR_RayTracingAvailable() ? "ready" : "unavailable",
-                GR_RayTracingEnabled() ? "armed (not implemented)" : "off");
+                GR_RayTracingEnabled() ? "active" : (requested && GR_RayTracingAvailable() ? "warming up" : "off"));
     } else if (strcmp(cmd, "FLMODE") == 0) {
         /* flmode 0..3 | classic | classicshadows | modern | modernshadows */
         int mode = g_PcConfig.flashlightMode;
